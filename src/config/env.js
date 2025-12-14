@@ -1,0 +1,22 @@
+require("dotenv").config();
+
+module.exports = {
+  PORT: process.env.PORT || 3000,
+  NODE_ENV: process.env.NODE_ENV,
+  APP_NAME: process.env.APP_NAME,
+  MONGODB_URI: process.env.MONGODB_URI,
+  JWT_SECRET: process.env.JWT_SECRET,
+  STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
+  APP_PASSWORD: process.env.APP_PASSWORD,
+  UPLOAD_API_TOKEN: process.env.UPLOAD_API_TOKEN,
+  AGORA_APP_ID: process.env.AGORA_APP_ID,
+  AGORA_APP_CERTIFICATE: process.env.AGORA_APP_CERTIFICATE,
+  TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID,
+  TWILIO_AUTH_TOKEN: process.env.TWILIO_AUTH_TOKEN,
+  TWILIO_PHONE_NUMBER: process.env.TWILIO_PHONE_NUMBER,
+  FIREBASE_PROJECT_ID: process.env.FIREBASE_PROJECT_ID,
+  FIREBASE_PRIVATE_KEY: process.env.FIREBASE_PRIVATE_KEY,
+  FIREBASE_CLIENT_EMAIL: process.env.FIREBASE_CLIENT_EMAIL,
+  AUTH_EMAIL: process.env.AUTH_EMAIL,
+  APP_PASSWORD: process.env.APP_PASSWORD,
+};
