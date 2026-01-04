@@ -12,7 +12,6 @@ router.post(
 // Signup routes
 router.post(
   "/signup/user",
-  upload.single("avatar"),
   controller.signUpUser.bind(controller)
 );
 

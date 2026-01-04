@@ -31,11 +31,11 @@ class Service {
       } = req.body;
 
       // Handle file upload for avatar
-      const avatar = req.file ? req.file.location : avatarId;
+      const avatar = avatarId;
 
       // At least one of email or phoneNumber is required
       if (!email && !phoneNumber) {
-        return handlers.response.error({
+        return handlers.response.failed({
           res,
           message: "Email or phone number is required...",
         });
@@ -43,7 +43,7 @@ class Service {
 
       // Validate email if provided
       if (email && !emailValidator(email)) {
-        return handlers.response.error({ res, message: "Invalid email..." });
+        return handlers.response.failed({ res, message: "Invalid email..." });
       }
 
       // Check if user already exists with email or phone
@@ -58,7 +58,7 @@ class Service {
 
       const existingUser = await this.user.findOne(query);
       if (existingUser && existingUser.isVerified) {
-        return handlers.response.error({
+        return handlers.response.failed({
           res,
           message:
             "User with this email or phone number or user name already exists...",
@@ -111,43 +111,42 @@ class Service {
 
       return handlers.response.success({
         res,
-        message: `User registered successfully. OTP sent to ${
-          email ? "email" : "phone"
-        }.`,
+        message: `User registered successfully. OTP sent to ${email ? "email" : "phone"
+          }.`,
         data: { userId: user._id },
       });
     } catch (error) {
       logger.error({ message: error.message });
-      return handlers.response.failed({ res, message: error.message });
+      return handlers.response.error({ res, message: error.message });
     }
   }
 
   async signIn(req, res) {
     try {
-      const { email, phoneNumber, deviceToken, password } = req.body;
+      const { email, phoneNumber, deviceToken, password, role } = req.body;
 
       // At least one identifier (email or phone) is required
       if (!email && !phoneNumber) {
-        return handlers.response.error({
+        return handlers.response.failed({
           res,
           message: "Email or phone number is required...",
         });
       }
 
       if (!deviceToken || !password) {
-        return handlers.response.error({
+        return handlers.response.failed({
           res,
           message: "Device token and password are required...",
         });
       }
 
       if (role !== "user") {
-        return handlers.response.error({ res, message: "Invalid role..." });
+        return handlers.response.failed({ res, message: "Invalid role..." });
       }
 
       // Validate email if provided
       if (email && !emailValidator(email)) {
-        return handlers.response.error({ res, message: "Invalid email..." });
+        return handlers.response.failed({ res, message: "Invalid email..." });
       }
 
       // Find user by email or phone number
@@ -167,7 +166,7 @@ class Service {
       }
       const isMatch = await bcrypt.compare(password, user.password);
       if (!isMatch) {
-        return handlers.response.error({
+        return handlers.response.failed({
           res,
           message: "Incorrect password.",
         });
@@ -181,16 +180,17 @@ class Service {
       }
 
       if (user.isDeleted) {
-        return handlers.response.error({
+        return handlers.response.failed({
           res,
           message: "Login failed. This account is no longer active.",
         });
       }
 
       if (!user.isVerified) {
-        return handlers.response.error({
+        return handlers.response.failed({
           res,
           message: "Account not verified. Please verify your account first.",
+          error: { userId: user.id }
         });
       }
       const payload = { _id: user._id };
@@ -203,7 +203,7 @@ class Service {
       });
     } catch (error) {
       logger.error({ message: error.message });
-      return handlers.response.failed({ res, message: error.message });
+      return handlers.response.error({ res, message: error.message });
     }
   }
 
@@ -212,11 +212,11 @@ class Service {
       const { userId, otp, type } = req.body;
 
       if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
-        return handlers.response.error({ res, message: "Invalid User ID..." });
+        return handlers.response.failed({ res, message: "Invalid User ID..." });
       }
 
       if (!otp) {
-        return handlers.response.error({ res, message: "OTP is required..." });
+        return handlers.response.failed({ res, message: "OTP is required..." });
       }
 
       const user = await this.user.findById(userId);
@@ -240,11 +240,11 @@ class Service {
         user.otpExpiry = null;
         await user.save();
 
-        return handlers.response.error({ res, message: "OTP has expired..." });
+        return handlers.response.failed({ res, message: "OTP has expired..." });
       }
 
       if (user.otp !== Number(otp)) {
-        return handlers.response.error({ res, message: "Invalid OTP..." });
+        return handlers.response.failed({ res, message: "Invalid OTP..." });
       }
 
       const payload = { _id: user._id };
@@ -276,7 +276,7 @@ class Service {
       });
     } catch (error) {
       logger.error({ message: error.message });
-      return handlers.response.failed({ res, message: error.message });
+      return handlers.response.error({ res, message: error.message });
     }
   }
 
@@ -285,7 +285,7 @@ class Service {
       const { userId } = req.body;
 
       if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
-        return handlers.response.error({ res, message: "Invalid User ID..." });
+        return handlers.response.failed({ res, message: "Invalid User ID..." });
       }
 
       const user = await this.user.findById(userId);
@@ -318,7 +318,7 @@ class Service {
       });
     } catch (error) {
       logger.error({ message: error.message });
-      return handlers.response.failed({ res, message: error.message });
+      return handlers.response.error({ res, message: error.message });
     }
   }
 
@@ -334,7 +334,7 @@ class Service {
       } = req.body;
 
       if (!role || !authProvider || !deviceToken || !socialToken) {
-        return handlers.response.error({
+        return handlers.response.failed({
           res,
           message:
             "Role, auth provider, device token, and social token are required...",
@@ -342,11 +342,11 @@ class Service {
       }
 
       if (role !== "user") {
-        return handlers.response.error({ res, message: "Invalid role..." });
+        return handlers.response.failed({ res, message: "Invalid role..." });
       }
 
       if (!["phone", "google", "apple"].includes(authProvider)) {
-        return handlers.response.error({
+        return handlers.response.failed({
           res,
           message: "Invalid Auth Provider...",
         });
@@ -356,7 +356,7 @@ class Service {
 
       if (authProvider === "phone") {
         if (!phoneNumber) {
-          return handlers.response.error({
+          return handlers.response.failed({
             res,
             message: "Phone number is required...",
           });
@@ -399,7 +399,7 @@ class Service {
         });
       } else if (authProvider === "google" || authProvider === "apple") {
         if (!email) {
-          return handlers.response.error({
+          return handlers.response.failed({
             res,
             message: "Email is required for social login...",
           });
@@ -417,7 +417,7 @@ class Service {
             isVerified: true,
           });
         } else if (user.authProvider !== authProvider) {
-          return handlers.response.error({
+          return handlers.response.failed({
             res,
             message:
               "This email is already registered with . Please use that method to login.",
@@ -437,14 +437,14 @@ class Service {
           data: { user, token: authToken },
         });
       } else {
-        return handlers.response.error({
+        return handlers.response.failed({
           res,
           message: "Something went wrong",
         });
       }
     } catch (error) {
       logger.error({ message: error.message });
-      return handlers.response.failed({ res, message: error.message });
+      return handlers.response.error({ res, message: error.message });
     }
   }
 
@@ -474,7 +474,7 @@ class Service {
       });
     } catch (error) {
       logger.error({ message: error.message });
-      return handlers.response.failed({ res, message: error.message });
+      return handlers.response.error({ res, message: error.message });
     }
   }
 
@@ -490,7 +490,7 @@ class Service {
       const { interfaceLanguage } = req.body;
 
       if (!interfaceLanguage) {
-        return handlers.response.error({
+        return handlers.response.failed({
           res,
           message: "Interface language is required!",
         });
@@ -514,7 +514,7 @@ class Service {
       });
     } catch (error) {
       logger.error({ message: error.message });
-      return handlers.response.failed({ res, message: error.message });
+      return handlers.response.error({ res, message: error.message });
     }
   }
 
@@ -549,7 +549,7 @@ class Service {
       });
     } catch (error) {
       logger.error({ message: error.message });
-      return handlers.response.failed({ res, message: error.message });
+      return handlers.response.error({ res, message: error.message });
     }
   }
 
@@ -558,17 +558,17 @@ class Service {
       const { email, role } = req.body;
 
       if (!email || !emailValidator(email)) {
-        return handlers.response.error({ res, message: "Invalid email..." });
+        return handlers.response.failed({ res, message: "Invalid email..." });
       }
       if (!role) {
-        return handlers.response.error({
+        return handlers.response.failed({
           res,
           message: "Role is required...",
         });
       }
 
       if (!["user", "vendor"].includes(role)) {
-        return handlers.response.error({ res, message: "Invalid role..." });
+        return handlers.response.failed({ res, message: "Invalid role..." });
       }
 
       const user = await this.user.findOne({ email, role });
@@ -600,7 +600,7 @@ class Service {
       });
     } catch (error) {
       logger.error({ message: error.message });
-      return handlers.response.failed({ res, message: error.message });
+      return handlers.response.error({ res, message: error.message });
     }
   }
 
@@ -608,7 +608,7 @@ class Service {
     try {
       const { newPassword, resetToken, userId } = req.body;
       if (!newPassword || !resetToken) {
-        return handlers.response.error({
+        return handlers.response.failed({
           res,
           message: "New password and reset token are required",
         });
@@ -627,7 +627,7 @@ class Service {
         user.resetToken !== resetToken ||
         user.resetTokenExpiry.getTime() <= currentTime.getTime()
       ) {
-        return handlers.response.error({
+        return handlers.response.failed({
           res,
           message: "Invalid or expired reset token",
         });
@@ -644,7 +644,7 @@ class Service {
       });
     } catch (error) {
       logger.error({ message: error.message });
-      return handlers.response.failed({ res, message: error.message });
+      return handlers.response.error({ res, message: error.message });
     }
   }
 
@@ -665,7 +665,7 @@ class Service {
       });
     } catch (error) {
       logger.error({ message: error.message });
-      return handlers.response.failed({ res, message: error.message });
+      return handlers.response.error({ res, message: error.message });
     }
   }
 
@@ -681,7 +681,7 @@ class Service {
       const { currentPassword, newPassword } = req.body;
 
       if (!currentPassword || !newPassword) {
-        return handlers.response.error({
+        return handlers.response.failed({
           res,
           message: "Current and new passwords are required",
         });
@@ -697,7 +697,7 @@ class Service {
 
       const isMatch = await user.comparePassword(currentPassword);
       if (!isMatch) {
-        return handlers.response.error({
+        return handlers.response.failed({
           res,
           message: "Current password is incorrect",
         });
@@ -712,7 +712,7 @@ class Service {
       });
     } catch (error) {
       logger.error({ message: error.message });
-      return handlers.response.failed({ res, message: error.message });
+      return handlers.response.error({ res, message: error.message });
     }
   }
 
@@ -740,7 +740,7 @@ class Service {
       });
     } catch (error) {
       logger.error({ message: error.message });
-      return handlers.response.failed({ res, message: error.message });
+      return handlers.response.error({ res, message: error.message });
     }
   }
 
@@ -750,7 +750,7 @@ class Service {
 
       // At least one identifier is required
       if (!email && !phoneNumber && !userName) {
-        return handlers.response.error({
+        return handlers.response.failed({
           res,
           message:
             "Email or phone number or user name is required to check availability...",
@@ -759,7 +759,7 @@ class Service {
 
       // Validate email format if provided
       if (email && !emailValidator(email)) {
-        return handlers.response.error({
+        return handlers.response.failed({
           res,
           message: "Invalid email format...",
         });
@@ -863,7 +863,7 @@ class Service {
       });
     } catch (error) {
       logger.error({ message: error.message });
-      return handlers.response.failed({ res, message: error.message });
+      return handlers.response.error({ res, message: error.message });
     }
   }
 }
