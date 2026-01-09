@@ -12,6 +12,10 @@ const userSchema = new Schema(
       type: { type: String, enum: ["Point"], default: "Point" },
       coordinates: { type: [Number], default: [0, 0], index: "2dsphere" },
     },
+    wallet: {
+      coins: { type: Number, default: 0 },
+      lockedCoins: { type: Number, default: 0 } // during matches
+    },
     email: {
       type: String,
       trim: true,
@@ -44,6 +48,7 @@ const userSchema = new Schema(
     isNotificationEnabled: { type: Boolean, default: false },
     isProfileCompleted: { type: Boolean, default: false },
     avatar: { type: String, trim: true, default: null },
+    friends: [{ type: Schema.Types.ObjectId, ref: "User" }],
   },
   { timestamps: true }
 );
