@@ -9,6 +9,8 @@ const walletTransactionSchema = new Schema(
       enum: [
         "GAME_JOIN",
         "GAME_WIN",
+        "GAME_LOSS",
+        "GAME_REFUND",
         "TOURNAMENT_WIN",
         "COIN_PURCHASE",
         "TRANSFER_IN",
