@@ -7,6 +7,7 @@ const MatchSchema = new Schema(
       enum: ["1V1", "2V2", "4P", "PRIVATE", "TOURNAMENT"]
     },
     roomCode: { type: String, unique: true },
+    maxPlayers: { type: Number, required: true },
 
     joiningFee: { type: Number, default: 0 },
     winningMultiplier: { type: Number, default: 1 }, // W
