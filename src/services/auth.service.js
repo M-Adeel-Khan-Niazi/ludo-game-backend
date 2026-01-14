@@ -10,6 +10,7 @@ const mongoose = require("mongoose");
 const bcrypt = require("bcrypt");
 const User = require("../models/User");
 const logger = require("../config/logger");
+const { format } = require("date-fns");
 
 class Service {
   constructor() {
@@ -100,13 +101,16 @@ class Service {
       }
 
       // Send OTP via email if email is provided
-      // if (email) {
-      //   await sendMail(
-      //     user.email,
-      //     "Email Verification OTP",
-      //     `Your email verification OTP is: ${otp}\n\nThis OTP will expire in 10 minutes.`
-      //   );
-      // }
+      if (email) {
+        await sendMail(
+          user.email,
+          "Email Verification OTP",
+          `Your email verification OTP is: ${otp}\n\nThis OTP will expire in ${format(
+            otpExpiry,
+            "dd/MM/yyyy hh:mm a"
+          )}.`
+        );
+      }
       // TODO: Send OTP via SMS if only phone number is provided
 
       return handlers.response.success({
@@ -303,13 +307,13 @@ class Service {
       await user.save();
 
       // Send OTP via email if email exists
-      // if (user.email) {
-      //   await sendMail(
-      //     user.email,
-      //     "Email Verification OTP",
-      //     `Your email verification OTP is: ${otp}\n\nThis OTP will expire in 10 minutes.`
-      //   );
-      // }
+      if (user.email) {
+        await sendMail(
+          user.email,
+          "Email Verification OTP",
+          `Your email verification OTP is: ${otp}\n\nThis OTP will expire in 10 minutes.`
+        );
+      }
       // TODO: Send OTP via SMS if only phone number exists
 
       return handlers.response.success({
@@ -596,11 +600,11 @@ class Service {
       await user.save();
 
       // Send OTP via email
-      // await sendMail(
-      //   user.email,
-      //   "Password Reset OTP",
-      //   `Your password reset OTP is: ${otp}\n\nThis OTP will expire in 10 minutes.`
-      // );
+      await sendMail(
+        user.email,
+        "Password Reset OTP",
+        `Your password reset OTP is: ${otp}\n\nThis OTP will expire in 10 minutes.`
+      );
 
       return handlers.response.success({
         res,

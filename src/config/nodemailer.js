@@ -1,33 +1,23 @@
-const nodemailer = require("nodemailer");
-const { AUTH_EMAIL, APP_PASSWORD } = require("./env");
+const { Resend } = require("resend");
+const { FROM_EMAIL, RESEND_KEY } = require("./env");
 const logger = require("./logger");
+const resend = new Resend(RESEND_KEY);
 
-const host = "smtp.gmail.com";
-const port = 587;
-const secure = false;
-const user = AUTH_EMAIL;
-const pass = APP_PASSWORD;
-
-const transporter = nodemailer.createTransport({
-  host,
-  port,
-  secure,
-  auth: { user, pass },
-});
-
-const sendEmail = async ({ to, subject, text, html }) => {
+const sendEmail = async (to, subject, html) => {
   try {
-    const mailOptions = {
-      from: user,
+    const { data, error } = await resend.emails.send({
+      from: FROM_EMAIL,
       to,
       subject,
-      text,
       html,
-    };
+    });
 
-    const info = await transporter.sendMail(mailOptions);
-    logger.success(info.messageId);
-    return info;
+    if (error) {
+      return console.error({ error });
+    }
+
+    logger.success(data.id);
+    return data;
   } catch (error) {
     return logger.error(error.message);
   }
