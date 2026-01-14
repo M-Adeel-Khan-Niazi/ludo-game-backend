@@ -11,10 +11,13 @@ const bcrypt = require("bcrypt");
 const User = require("../models/User");
 const logger = require("../config/logger");
 const { format } = require("date-fns");
+const twilio = require("twilio");
+const { TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_VERIFY_SERVICE_ID } = require("../config/env");
 
 class Service {
   constructor() {
     this.user = User;
+    this.twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
   }
 
   // Signup for User
@@ -118,6 +121,55 @@ class Service {
         message: `User registered successfully. OTP sent to ${email ? "email" : "phone"
           }.`,
         data: { userId: user._id },
+      });
+    } catch (error) {
+      logger.error({ message: error.message });
+      return handlers.response.error({ res, message: error.message });
+    }
+  }
+
+  async phoneSignIn(req, res) {
+    try {
+      const { phoneNumber, role } = req.body;
+
+      if (!phoneNumber) {
+        return handlers.response.failed({
+          res,
+          message: "Phone number is required...",
+        });
+      }
+
+      if (role !== "user") {
+        return handlers.response.failed({ res, message: "Invalid role..." });
+      }
+
+      const user = await this.user.findOne({ phoneNumber, role });
+      if (!user) {
+        return handlers.response.unavailable({
+          res,
+          message: "Account not found. Please sign up first.",
+        });
+      }
+
+      if (!user.isActive) {
+        return handlers.response.unavailable({
+          res,
+          message: "Account is not active. Please contact support.",
+        });
+      }
+
+      await this.twilioClient.verify.v2.services(TWILIO_VERIFY_SERVICE_ID)
+        .verifications.create({
+          to: phoneNumber,
+          channel: "sms",
+        }).catch((error) => {
+          logger.error({ message: error.message });
+          return handlers.response.error({ res, message: error.message });
+        });
+
+      return handlers.response.success({
+        res,
+        message: "OTP sent successfully...",
       });
     } catch (error) {
       logger.error({ message: error.message });
@@ -272,6 +324,50 @@ class Service {
           data: { user, resetToken },
         });
       }
+
+      return handlers.response.success({
+        res,
+        message: "OTP Verification Successful",
+        data: { user, token: authToken },
+      });
+    } catch (error) {
+      logger.error({ message: error.message });
+      return handlers.response.error({ res, message: error.message });
+    }
+  }
+
+  async verifyPhoneOTP(req, res) {
+    try {
+      const { phoneNumber, otp } = req.body;
+
+      if (!phoneNumber || !otp) {
+        return handlers.response.failed({ res, message: "Phone number and OTP are required..." });
+      }
+
+      const user = await this.user.findOne({ phoneNumber });
+      if (!user) {
+        return handlers.response.unavailable({
+          res,
+          message: "User not found...",
+        });
+      }
+
+      await this.twilioClient.verify.v2.services(TWILIO_VERIFY_SERVICE_ID)
+        .verificationChecks.create({
+          to: phoneNumber,
+          code: otp.toString(),
+        }).catch((error) => {
+          logger.error({ message: error.message });
+          return handlers.response.error({ res, message: error.message });
+        });
+
+      const payload = { _id: user._id };
+      const authToken = generateToken(payload);
+      user.otp = null;
+      user.otpExpiry = null;
+      user.isVerified = true;
+      user.isDeleted = false;
+      await user.save();
 
       return handlers.response.success({
         res,

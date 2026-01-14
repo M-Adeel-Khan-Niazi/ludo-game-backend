@@ -17,11 +17,13 @@ router.post(
 
 // Signin routes
 router.post("/sign-in", controller.signIn.bind(controller));
+router.post("/phone-sign-in", controller.phoneSignIn.bind(controller));
 
 // OTP routes
 router.post("/forgot-password", controller.forgotPassword.bind(controller));
 router.patch("/reset-password", controller.resetPassword.bind(controller));
 router.post("/verify-otp", controller.verifyOTP.bind(controller));
+router.post("/verify-phone-otp", controller.verifyPhoneOTP.bind(controller));
 router.post("/resend-otp", controller.resendOTP.bind(controller));
 
 // Social login

@@ -11,6 +11,14 @@ class Controller {
     await this.service.signIn(req, res);
   }
 
+  async phoneSignIn(req, res) {
+    await this.service.phoneSignIn(req, res);
+  }
+
+  async verifyPhoneOTP(req, res) {
+    await this.service.verifyPhoneOTP(req, res);
+  }
+
   async verifyOTP(req, res) {
     await this.service.verifyOTP(req, res);
   }
@@ -38,7 +46,7 @@ class Controller {
   async checkAvailability(req, res) {
     await this.service.checkAvailability(req, res);
   }
-  
+
   async updateProfile(req, res) {
     await this.service.updateProfile(req, res);
   }
