@@ -16,8 +16,15 @@ const MatchSchema = new Schema(
       color: { type: String, enum: ["red", "green", "yellow", "blue"] },
       userId: { type: Schema.Types.ObjectId, ref: "User" },
       team: { type: Number, default: null }, // 1 or 2 (for 2v2)
-      position: { type: String, default: null },
-      status: { type: String, enum: ["ACTIVE", "LEFT", "DISCONNECTED"] }
+      status: { type: String, enum: ["ACTIVE", "LEFT", "DISCONNECTED"] },
+      tokens: [
+        {
+          tokenId: { type: String, default: null },      // "R1", "R2", "R3", "R4"
+          position: { type: String, default: null },     // -1 = home, 0–51 board, 52–57 home path
+          isFinished: { type: Boolean, default: false }
+        }
+      ],
+
     }],
 
     currentTurn: {
