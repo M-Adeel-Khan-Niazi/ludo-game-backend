@@ -531,6 +531,16 @@ class Service {
       // Handle avatar upload
       if (req.file) updates.avatar = req.file.location;
 
+      if (updates.userName) {
+        const user = await this.user.findOne({ userName: updates.userName });
+        if (user && user._id.toString() !== req.user._id.toString()) {
+          return handlers.response.failed({
+            res,
+            message: "Username already exists...",
+          });
+        }
+      }
+
       const user = await this.user.findById(req.user._id);
       if (!user) {
         return handlers.response.unavailable({
