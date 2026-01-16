@@ -178,6 +178,7 @@ class Service {
       return handlers.response.success({
         res,
         message: "OTP sent successfully...",
+        data: { phoneNumber: user.phoneNumber },
       });
     } catch (error) {
       logger.error({ message: error.message });
