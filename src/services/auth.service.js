@@ -51,7 +51,8 @@ class Service {
       }
 
       // Check if user already exists with email or phone
-      const query = { role: "user", userName };
+      const query = { role: "user" };
+      if (userName) query.userName = userName;
       if (email && phoneNumber) {
         query.$or = [{ email }, { phoneNumber }];
       } else if (email) {
@@ -92,7 +93,7 @@ class Service {
           phoneNumber: phoneNumber || null,
           role: "user",
           deviceToken,
-          authProvider: "email",
+          authProvider: phoneNumber ? "phone" : "email",
           otp,
           otpExpiry,
           dob: dob || null,
@@ -130,12 +131,12 @@ class Service {
 
   async phoneSignIn(req, res) {
     try {
-      const { phoneNumber, role } = req.body;
+      const { phoneNumber, deviceToken, role } = req.body;
 
-      if (!phoneNumber) {
+      if (!phoneNumber || !deviceToken || !role) {
         return handlers.response.failed({
           res,
-          message: "Phone number is required...",
+          message: "Phone number, device token and role are required...",
         });
       }
 
@@ -155,6 +156,13 @@ class Service {
         return handlers.response.unavailable({
           res,
           message: "Account is not active. Please contact support.",
+        });
+      }
+      if (!user.isVerified) {
+        return handlers.response.unavailable({
+          res,
+          message: "Account is not verified. Please verify your account.",
+          error: { userId: user._id },
         });
       }
 
