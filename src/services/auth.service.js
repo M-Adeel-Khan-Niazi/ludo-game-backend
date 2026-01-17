@@ -94,8 +94,8 @@ class Service {
           role: "user",
           deviceToken,
           authProvider: phoneNumber ? "phone" : "email",
-          otp,
-          otpExpiry,
+          otp: phoneNumber ? otp : null,
+          otpExpiry: phoneNumber ? otpExpiry : null,
           dob: dob || null,
           fullName: fullName || null,
           userName: userName || null,
@@ -167,7 +167,7 @@ class Service {
         });
       }
       if (!user.isVerified) {
-        return handlers.response.unavailable({
+        return handlers.response.failed({
           res,
           message: "Account is not verified. Please verify your account.",
           error: { userId: user._id },
