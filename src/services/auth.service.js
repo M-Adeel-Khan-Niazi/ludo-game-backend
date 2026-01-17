@@ -129,7 +129,7 @@ class Service {
         res,
         message: `User registered successfully. OTP sent to ${email ? "email" : "phone"
           }.`,
-        data: { userId: user._id },
+        data: { userId: user._id, phoneNumber: user.phoneNumber },
       });
     } catch (error) {
       logger.error({ message: error.message });
