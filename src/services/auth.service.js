@@ -170,7 +170,7 @@ class Service {
         return handlers.response.failed({
           res,
           message: "Account is not verified. Please verify your account.",
-          error: { userId: user._id },
+          error: { userId: user._id, isVerified: false},
         });
       }
 
@@ -263,7 +263,7 @@ class Service {
         return handlers.response.failed({
           res,
           message: "Account not verified. Please verify your account first.",
-          error: { userId: user.id }
+          error: { userId: user.id, isVerified: false }
         });
       }
       const payload = { _id: user._id };
