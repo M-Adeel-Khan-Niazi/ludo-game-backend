@@ -114,8 +114,16 @@ class Service {
             "dd/MM/yyyy hh:mm a"
           )}.`
         );
+      } else if (phoneNumber) {
+        await this.twilioClient.verify.v2.services(TWILIO_VERIFY_SERVICE_ID)
+          .verifications.create({
+            to: phoneNumber,
+            channel: "sms",
+          }).catch((error) => {
+            logger.error({ message: error.message });
+            return handlers.response.error({ res, message: error.message });
+          });
       }
-      // TODO: Send OTP via SMS if only phone number is provided
 
       return handlers.response.success({
         res,
@@ -418,8 +426,16 @@ class Service {
           "Email Verification OTP",
           `Your email verification OTP is: ${otp}\n\nThis OTP will expire in 10 minutes.`
         );
+      } else if (user.phoneNumber) {
+        await this.twilioClient.verify.v2.services(TWILIO_VERIFY_SERVICE_ID)
+          .verifications.create({
+            to: user.phoneNumber,
+            channel: "sms",
+          }).catch((error) => {
+            logger.error({ message: error.message });
+            return handlers.response.error({ res, message: error.message });
+          });
       }
-      // TODO: Send OTP via SMS if only phone number exists
 
       return handlers.response.success({
         res,
