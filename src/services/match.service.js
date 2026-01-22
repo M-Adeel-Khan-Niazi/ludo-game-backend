@@ -128,7 +128,7 @@ class MatchService {
             joiningFee,
             isPrivate: false,
             state: "WAITING",
-            $where: "this.players.length < this.maxPlayers",
+            $expr: { $lt: [{ $size: "$players" }, "$maxPlayers"] },
             "players.userId": { $ne: userId }
         });
 
@@ -160,6 +160,16 @@ class MatchService {
         // Check if full
         if (match.players.length === match.maxPlayers) {
             match.state = "RUNNING"; // Ready to start
+
+            // Initialize Turn (Red goes first usually)
+            const firstPlayer = match.players.find(p => p.color === "red") || match.players[0];
+            match.currentTurn = {
+                userId: firstPlayer.userId,
+                color: firstPlayer.color,
+                diceValues: [],
+                usedDiceIndices: [],
+                rollCount: 0
+            };
         }
 
         await match.save();
@@ -173,7 +183,7 @@ class MatchService {
             return await this.joinMatch(userId, existing._id);
         }
         // Create new
-        return await this.createMatchAndJoin(userId, gameType, joiningFee, false);
+        return await this.createMatchAndJoin(userId, 'red', gameType, joiningFee, false);
     }
 }
 

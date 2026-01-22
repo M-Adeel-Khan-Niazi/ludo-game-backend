@@ -20,7 +20,7 @@ const MatchSchema = new Schema(
       tokens: [
         {
           tokenId: { type: String, default: null },      // "R1", "R2", "R3", "R4"
-          position: { type: String, default: null },     // -1 = home, 0–51 board, 52–57 home path
+          position: { type: Number, default: -1 },       // -1 = home, 0–51 board, 52–57 home path
           isFinished: { type: Boolean, default: false }
         }
       ],
@@ -29,7 +29,10 @@ const MatchSchema = new Schema(
 
     currentTurn: {
       userId: { type: Schema.Types.ObjectId, ref: "User" },
-      color: { type: String, enum: ["red", "green", "yellow", "blue"] }
+      color: { type: String, enum: ["red", "green", "yellow", "blue"] },
+      diceValues: [{ type: Number }], // Array of rolled values e.g. [3, 5]
+      usedDiceIndices: [{ type: Number }], // Array of indices of used dice e.g. [0]
+      rollCount: { type: Number, default: 0 } // Track rolls if implementing 3x 6s rule
     },
 
     winner: { type: Schema.Types.ObjectId, ref: "User" },

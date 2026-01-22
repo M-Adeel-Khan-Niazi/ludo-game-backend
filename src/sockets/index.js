@@ -27,7 +27,7 @@ module.exports = (httpServer) => {
         return next(new Error("Authentication error: token required"));
 
       const payload = jwt.verify(token, JWT_SECRET);
-      const user = await User.findById(payload.sub).select("-password");
+      const user = await User.findById(payload._id).select("-password");
       if (!user) return next(new Error("Authentication error: user not found"));
       socket.user = user; // attach user to socket
       next();
@@ -39,15 +39,17 @@ module.exports = (httpServer) => {
 
   // connection
   io.on("connection", (socket) => {
-    logger.log(`Socket connected: ${socket.id} userId: ${socket.user._id}`);
+    console.log(`Socket connected: ${socket.id} userId: ${socket.user._id}`);
 
     // Example: join a personal room for direct messages
     socket.join(`user:${socket.user._id}`);
 
     // register handlers
+    const registerGameHandlers = require("./game.socket");
+    registerGameHandlers(io, socket);
 
     socket.on("disconnect", (reason) => {
-      logger.log(`Socket disconnected: ${socket.id} reason: ${reason}`);
+      console.log(`Socket disconnected: ${socket.id} reason: ${reason}`);
     });
   });
 

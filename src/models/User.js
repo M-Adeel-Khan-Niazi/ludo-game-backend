@@ -6,6 +6,7 @@ const userSchema = new Schema(
     fullName: { type: String, trim: true, default: null },
     timezone: { type: String, trim: true, default: null },
     userName: { type: String, trim: true, default: null },
+    playerId: { type: Number, unique: true, default: null },
     dob: { type: String, trim: true, default: null },
     location: {
       name: { type: String, default: null },
@@ -15,6 +16,14 @@ const userSchema = new Schema(
     wallet: {
       coins: { type: Number, default: 0 },
       lockedCoins: { type: Number, default: 0 } // during matches
+    },
+    playerStats: {
+      gamesPlayed: { type: Number, default: 0 },
+      games4PWon: { type: Number, default: 0 },
+      games2PWon: { type: Number, default: 0 },
+      tournamentWon: { type: Number, default: 0 },
+      totalCoinsEarned: { type: Number, default: 0 },
+      totalCoinsSpent: { type: Number, default: 0 },
     },
     email: {
       type: String,
