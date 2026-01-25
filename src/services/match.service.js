@@ -152,7 +152,7 @@ class MatchService {
 
         match.players.push({
             userId,
-            color: nextColor,
+            color: match.gameType === "1V1" ? 'yellow' : nextColor,
             status: "ACTIVE",
             team: match.gameType === "2V2" ? (match.players.length % 2) + 1 : null
         });
