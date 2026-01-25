@@ -177,6 +177,38 @@ class SocialService {
             return handlers.response.error({ res, error, message: error.message });
         }
     }
+
+    async reportMessage(req, res) {
+        try {
+            // Need ChatMessage model here? Maybe require at top, or inside.
+            // Assuming Report model already imported.
+            const ChatMessage = require("../models/ChatMessage");
+
+            const { messageId, reason, description } = req.body;
+            const userId = req.user._id;
+
+            const message = await ChatMessage.findById(messageId);
+            if (!message) {
+                return handlers.response.notFound({ res, message: "Message not found" });
+            }
+
+            const report = await Report.create({
+                reporter: userId,
+                reportedUser: message.sender, // The sender of the message
+                reportedMessage: messageId,
+                reason,
+                description,
+            });
+
+            return handlers.response.success({
+                res,
+                message: "Message reported successfully",
+                data: report,
+            });
+        } catch (error) {
+            return handlers.response.error({ res, error, message: error.message });
+        }
+    }
 }
 
 module.exports = new SocialService();

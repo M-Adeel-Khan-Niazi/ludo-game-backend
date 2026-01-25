@@ -17,5 +17,6 @@ router.post("/unblock", authenticateJwt, socialController.unblockUser.bind(socia
 
 // Report
 router.post("/report", authenticateJwt, socialController.reportUser.bind(socialController));
+router.post("/report-message", authenticateJwt, socialController.reportMessage.bind(socialController));
 
 module.exports = router;

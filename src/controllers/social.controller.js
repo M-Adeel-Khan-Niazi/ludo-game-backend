@@ -29,6 +29,10 @@ class SocialController {
     async reportUser(req, res) {
         await SocialService.reportUser(req, res);
     }
+
+    async reportMessage(req, res) {
+        await SocialService.reportMessage(req, res);
+    }
 }
 
 module.exports = new SocialController();

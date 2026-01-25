@@ -33,6 +33,79 @@ module.exports = (io, socket) => {
         }
     });
 
+    // Chat Message
+    socket.on("game:sendMessage", async ({ matchId, type, content }) => {
+        try {
+            // Verify Match and Player
+            const match = await Match.findById(matchId);
+            if (!match) return socket.emit("error", { message: "Match not found" });
+
+            // Check if player is in match
+            const isPlayer = match.players.some(p => p.userId.toString() === socket.user._id.toString());
+            if (!isPlayer) return socket.emit("error", { message: "Access denied" });
+
+            const ChatMessage = require("../models/ChatMessage");
+            const message = await ChatMessage.create({
+                matchId,
+                sender: socket.user._id,
+                type: type || 'text',
+                content
+            });
+
+            const messageData = {
+                _id: message._id,
+                sender: {
+                    _id: socket.user._id,
+                    fullName: socket.user.fullName,
+                    avatar: socket.user.avatar
+                },
+                type: message.type,
+                content: message.content,
+                createdAt: message.createdAt
+            };
+
+            io.to(`game:${matchId}`).emit("game:messageReceived", messageData);
+
+        } catch (err) {
+            logger.error("Chat Error:", err);
+            socket.emit("error", { message: "Failed to send message" });
+        }
+    });
+
+    // Get Chat History
+    socket.on("game:getMessages", async ({ matchId, page = 1, limit = 50 }) => {
+        try {
+            // Verify Match and Player
+            const match = await Match.findById(matchId);
+            if (!match) return socket.emit("error", { message: "Match not found" });
+
+            const isPlayer = match.players.some(p => p.userId.toString() === socket.user._id.toString());
+            if (!isPlayer) return socket.emit("error", { message: "Access denied" });
+
+            const ChatMessage = require("../models/ChatMessage");
+
+            const messages = await ChatMessage.find({ matchId })
+                .populate("sender", "_id fullName avatar")
+                .sort({ createdAt: -1 })
+                .skip((page - 1) * limit)
+                .limit(limit);
+
+            // Reverse to show oldest first if client prefers, or keep as is? 
+            // Usually chat history is fetched oldest to newest for display, or newest first for pagination.
+            // Let's return as is (descending) and let client reverse, or just return ascending?
+            // "sort({ createdAt: -1 })" gives newest first. 
+            // If we want history, usually we want "recent 50".
+
+            socket.emit("game:messageHistory", {
+                messages: messages
+            });
+
+        } catch (err) {
+            logger.error("Get Messages Error:", err);
+            socket.emit("error", { message: "Failed to fetch messages" });
+        }
+    });
+
     // Roll Dice
     socket.on("game:rollDice", async ({ matchId }) => {
         try {
