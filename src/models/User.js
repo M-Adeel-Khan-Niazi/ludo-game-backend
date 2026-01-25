@@ -58,6 +58,7 @@ const userSchema = new Schema(
     isProfileCompleted: { type: Boolean, default: false },
     avatar: { type: String, trim: true, default: null },
     friends: [{ type: Schema.Types.ObjectId, ref: "User" }],
+    blockedUsers: [{ type: Schema.Types.ObjectId, ref: "User" }],
   },
   { timestamps: true }
 );
