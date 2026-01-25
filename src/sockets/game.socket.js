@@ -77,7 +77,7 @@ module.exports = (io, socket) => {
                 setTimeout(async () => {
                     const nextTurn = await GameLogic.switchTurn(match);
                     io.to(`game:${matchId}`).emit("game:turnChanged", nextTurn);
-                }, 1000);
+                }, 15000);
                 return;
             }
 
