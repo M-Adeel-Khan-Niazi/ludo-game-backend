@@ -7,7 +7,10 @@ module.exports = (io, socket) => {
     // Join Game Room
     socket.on("game:join", async ({ matchId }) => {
         try {
-            const match = await Match.findById(matchId);
+            const match = await Match.findById(matchId).populate({
+                path: "players.userId",
+                select: "_id fullName playerStats avatar"
+            })
             if (!match) return socket.emit("error", { message: "Match not found" });
 
             const player = match.players.find(p => p.userId.toString() === socket.user._id.toString());
@@ -17,7 +20,11 @@ module.exports = (io, socket) => {
             socket.join(roomName);
 
             socket.emit("game:state", match);
-            socket.to(roomName).emit("game:playerJoined", { userId: socket.user._id });
+            socket.to(roomName).emit("game:playerJoined", {
+                userId: socket.user._id,
+                avatar: socket.user.avatar,
+                fullName: socket.user.fullName
+            });
 
             logger.info(`User ${socket.user._id} joined game ${matchId}`);
         } catch (err) {

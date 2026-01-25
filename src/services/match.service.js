@@ -174,16 +174,16 @@ class MatchService {
 
         await match.save();
         const populatedMatch = await Match.findById(match._id)
-        .populate({
-            path: "players.userId",
-            select: "_id fullName playerStats avatar"
-        })
-        .populate({
-            path: "currentTurn.userId",
-            select: "_id fullName playerStats avatar"
-        });
+            .populate({
+                path: "players.userId",
+                select: "_id fullName playerStats avatar"
+            })
+            .populate({
+                path: "currentTurn.userId",
+                select: "_id fullName playerStats avatar"
+            });
 
-    return populatedMatch;
+        return populatedMatch;
     }
 
     // Use this if auto-matching
