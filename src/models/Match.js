@@ -17,6 +17,8 @@ const MatchSchema = new Schema(
       userId: { type: Schema.Types.ObjectId, ref: "User" },
       team: { type: Number, default: null }, // 1 or 2 (for 2v2)
       status: { type: String, enum: ["ACTIVE", "LEFT", "DISCONNECTED"] },
+      hasCaptured: { type: Boolean, default: false }, // Rule-5: Need capture to enter home
+      disconnectedAt: { type: Date, default: null }, // Rule-9: 2m timeout
       tokens: [
         {
           tokenId: { type: String, default: null },      // "R1", "R2", "R3", "R4"
@@ -32,7 +34,8 @@ const MatchSchema = new Schema(
       color: { type: String, enum: ["red", "green", "yellow", "blue"] },
       diceValues: [{ type: Number }], // Array of rolled values e.g. [3, 5]
       usedDiceIndices: [{ type: Number }], // Array of indices of used dice e.g. [0]
-      rollCount: { type: Number, default: 0 } // Track rolls if implementing 3x 6s rule
+      rollCount: { type: Number, default: 0 }, // Track rolls if implementing 3x 6s rule
+      pendingBonus: { type: Boolean, default: false } // Track if a bonus (capture/finish) was triggered
     },
 
     winner: { type: Schema.Types.ObjectId, ref: "User" },

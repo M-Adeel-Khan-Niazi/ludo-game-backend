@@ -2,6 +2,9 @@ const Match = require("../models/Match");
 const GameLogic = require("../services/game.logic");
 const logger = require("../config/logger");
 
+// Global disconnect timeouts map
+const disconnectTimeouts = new Map();
+
 module.exports = (io, socket) => {
 
     // Join Game Room
@@ -10,11 +13,25 @@ module.exports = (io, socket) => {
             const match = await Match.findById(matchId).populate({
                 path: "players.userId",
                 select: "_id fullName playerStats avatar"
-            })
+            }).populate({
+                path: "currentTurn.userId",
+                select: "_id fullName playerStats avatar"
+            });
             if (!match) return socket.emit("error", { message: "Match not found" });
 
-            const player = match.players.find(p => p.userId.toString() === socket.user._id.toString());
+            const player = match.players.find(p => p.userId._id.toString() === socket.user._id.toString());
             if (!player) return socket.emit("error", { message: "You are not in this match" });
+
+            // Clear disconnect timeout if exists
+            if (disconnectTimeouts.has(socket.user._id.toString())) {
+                clearTimeout(disconnectTimeouts.get(socket.user._id.toString()));
+                disconnectTimeouts.delete(socket.user._id.toString());
+            }
+
+            // Note: need to save state
+            player.status = "ACTIVE";
+            player.disconnectedAt = null;
+            await match.save();
 
             const roomName = `game:${matchId}`;
             socket.join(roomName);
@@ -25,6 +42,11 @@ module.exports = (io, socket) => {
                 avatar: socket.user.avatar,
                 fullName: socket.user.fullName
             });
+
+            // Rule 7: Notify when complete/ready. If running, broadcast state to ensure everyone has up-to-date Turn info.
+            if (match.state === "RUNNING") {
+                io.to(roomName).emit("game:state", match);
+            }
 
             logger.info(`User ${socket.user._id} joined game ${matchId}`);
         } catch (err) {
@@ -134,7 +156,7 @@ module.exports = (io, socket) => {
             // Check valid moves for ANY die
             let hasValidMoves = false;
             diceValues.forEach(val => {
-                if (player.tokens.some(t => GameLogic.isValidMove(t, val))) hasValidMoves = true;
+                if (player.tokens.some(t => GameLogic.isValidMove(t, val, player, match))) hasValidMoves = true;
             });
 
             if (!hasValidMoves) {
@@ -180,6 +202,15 @@ module.exports = (io, socket) => {
             // Apply Move
             const result = await GameLogic.applyMove(match, socket.user._id, tokenId, diceIndex);
 
+            if (result.groundedTokenId) {
+                // Emit penalty event
+                io.to(`game:${matchId}`).emit("game:tokenGrounded", {
+                    userId: socket.user._id,
+                    tokenId: result.groundedTokenId,
+                    message: "Token grounded for missed capture!"
+                });
+            }
+
             // Emit Update
             io.to(`game:${matchId}`).emit("game:tokenMoved", {
                 userId: socket.user._id,
@@ -202,7 +233,7 @@ module.exports = (io, socket) => {
                 const player = match.players.find(p => p.userId.toString() === socket.user._id.toString());
                 const remainingHasMoves = unusedIndices.some(idx => {
                     const val = match.currentTurn.diceValues[idx];
-                    return player.tokens.some(t => GameLogic.isValidMove(t, val));
+                    return player.tokens.some(t => GameLogic.isValidMove(t, val, player, match));
                 });
 
                 if (remainingHasMoves) {
@@ -212,13 +243,6 @@ module.exports = (io, socket) => {
                         message: "Please use remaining dice"
                     });
                     return;
-                } else {
-                    // No moves for remaining dice -> End Turn (unless bonus?)
-                    // If capturing gave bonus, usually you get NEW ROLL.
-                    // But first you must use what you can? 
-                    // Let's assume: If you can't move remaining, you lose them. 
-                    // AND if you had a bonus pending (from capture/finish/six), you get to roll again?
-                    // Simplifying: If no moves for remaining, turn ends or new roll if bonus.
                 }
             }
 
@@ -245,6 +269,62 @@ module.exports = (io, socket) => {
         } catch (err) {
             logger.error(err);
             socket.emit("error", { message: err.message || "Move Error" });
+        }
+    });
+
+    // Disconnect Handling
+    socket.on("disconnect", async () => {
+        try {
+            if (!socket.user) return;
+            const userId = socket.user._id.toString();
+
+            // Find active matches for this user
+            const matches = await Match.find({
+                "players.userId": userId,
+                state: "RUNNING"
+            });
+
+            for (const match of matches) {
+                const player = match.players.find(p => p.userId.toString() === userId);
+                if (player) {
+                    player.status = "DISCONNECTED";
+                    player.disconnectedAt = new Date();
+                    await match.save();
+
+                    io.to(`game:${match._id}`).emit("game:playerDisconnected", { userId, message: "Player disconnected. 2 minutes to rejoin." });
+
+                    // Set Timeout
+                    const timeoutId = setTimeout(async () => {
+                        try {
+                            const currentMatch = await Match.findById(match._id);
+                            if (!currentMatch || currentMatch.state !== "RUNNING") return;
+
+                            const p = currentMatch.players.find(p => p.userId.toString() === userId);
+                            if (p && p.status === "DISCONNECTED") {
+                                p.status = "DISQUALIFIED"; // Or LEFT
+                                // Remove tokens?
+                                p.tokens.forEach(t => t.position = -1); // Or remove completely?
+                                // "disqualified and will be out from the game"
+
+                                await currentMatch.save();
+                                io.to(`game:${match._id}`).emit("game:playerDisqualified", { userId, message: "Player disqualified due to timeout." });
+
+                                // If it was their turn, switch
+                                if (currentMatch.currentTurn.userId.toString() === userId) {
+                                    const nextTurn = await GameLogic.switchTurn(currentMatch);
+                                    io.to(`game:${match._id}`).emit("game:turnChanged", nextTurn);
+                                }
+                            }
+                        } catch (e) {
+                            logger.error("Timeout Error", e);
+                        }
+                    }, 2 * 60 * 1000); // 2 minutes
+
+                    disconnectTimeouts.set(userId, timeoutId);
+                }
+            }
+        } catch (err) {
+            logger.error("Disconnect Error", err);
         }
     });
 };
