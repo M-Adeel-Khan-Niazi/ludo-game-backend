@@ -201,6 +201,83 @@ class MatchService {
         // Create new
         return await this.createMatchAndJoin(userId, 'red', gameType, joiningFee, false);
     }
+    /**
+     * Handle player leaving a match
+     */
+    async leaveMatch(matchId, userId) {
+        const match = await Match.findById(matchId);
+        if (!match) throw new Error("Match not found");
+
+        const playerIndex = match.players.findIndex(p => p.userId.toString() === userId.toString());
+        if (playerIndex === -1) throw new Error("Player not in match");
+        const player = match.players[playerIndex];
+
+        // 1. Creator leaves, no players joined (WAITING)
+        if (match.state === "WAITING") {
+            // Rule 1: Created match & no player joined (players.length === 1)
+            // Or general leaving lobby logic
+            if (match.players.length === 1) {
+                await WalletService.cancelGame(userId, match.joiningFee, match._id);
+                await Match.deleteOne({ _id: match._id });
+                return { action: "MATCH_DELETED" };
+            } else {
+                // Leaving a lobby with others present
+                await WalletService.cancelGame(userId, match.joiningFee, match._id);
+                match.players.splice(playerIndex, 1);
+                await match.save();
+                return { action: "PLAYER_LEFT_LOBBY", match };
+            }
+        }
+
+        // 2 & 3. RUNNING
+        if (match.state === "RUNNING") {
+            // Rule 2: 1v1 -> Opponent Wins
+            if (match.gameType === "1V1") {
+                const opponent = match.players.find(p => p.userId.toString() !== userId.toString());
+                if (opponent) {
+                    // Settle Wallet Logic
+
+                    // Leaver: Loss (Lose joining fee)
+                    await WalletService.settleLoss(userId, match.joiningFee, match._id);
+
+                    // Winner: Win
+                    // Prize = Pool * Multiplier
+                    const pool = match.joiningFee * 2;
+                    const prize = Math.floor(pool * match.winningMultiplier);
+                    const adminDiff = pool - prize;
+
+                    await WalletService.settleWin(opponent.userId, match.joiningFee, prize, match._id);
+
+                    match.winner = opponent.userId;
+                    match.winningAmount = prize;
+                    match.adminProfit = (match.adminProfit || 0) + adminDiff;
+                    match.state = "COMPLETED";
+
+                    player.status = "LEFT";
+                    // Also update opponent status?
+                    // opponent.status = "WON"; // No WON status in enum, keep ACTIVE or update schema
+
+                    await match.save();
+                    return { action: "GAME_ENDED", winnerId: opponent.userId, winnerAmount: prize, match };
+                }
+            }
+
+            // Rule 3: Other matches -> Mark as LEFT
+            player.status = "LEFT";
+            // For 4P, if you leave, you lose your fee. 
+            await WalletService.settleLoss(userId, match.joiningFee, match._id);
+
+            // Tokens removed logic? 
+            // Usually tokens are removed or sit dead. 
+            // In game.socket disconnect logic, tokens are set to -1 (home).
+            player.tokens.forEach(t => t.position = -1);
+
+            await match.save();
+            return { action: "PLAYER_LEFT_GAME", match };
+        }
+
+        return { action: "NO_ACTION" };
+    }
 }
 
 module.exports = new MatchService();

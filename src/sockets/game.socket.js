@@ -1,6 +1,7 @@
 const Match = require("../models/Match");
 const GameLogic = require("../services/game.logic");
 const logger = require("../config/logger");
+const MatchService = require("../services/match.service");
 
 // Global disconnect timeouts map
 const disconnectTimeouts = new Map();
@@ -52,6 +53,60 @@ module.exports = (io, socket) => {
         } catch (err) {
             logger.error(err);
             socket.emit("error", { message: "Internal server error" });
+        }
+    });
+
+
+    // Leave Game (Rule: Handle creator leave, 1v1 forfeit, etc.)
+    socket.on("game:leaveMatch", async ({ matchId }) => {
+        try {
+            if (!socket.user) return socket.emit("error", { message: "Unauthorized" });
+
+            const result = await MatchService.leaveMatch(matchId, socket.user._id);
+
+            if (result.action === "MATCH_DELETED") {
+                // Determine if we should notify specific people.
+                // Since match is deleted, room might be just the creator.
+                io.to(`game:${matchId}`).emit("game:matchCancelled", { message: "Match cancelled by host" });
+
+                // Force leave room
+                const room = io.sockets.adapter.rooms.get(`game:${matchId}`);
+                if (room) {
+                    // In socket.io v4, we can make sockets leave
+                    // But simpler to just let client handle the event
+                }
+            }
+            else if (result.action === "PLAYER_LEFT_LOBBY") {
+                io.to(`game:${matchId}`).emit("game:playerLeft", { userId: socket.user._id, state: "WAITING" });
+                socket.emit("game:left", { message: "You left the lobby" });
+                socket.leave(`game:${matchId}`);
+            }
+            else if (result.action === "GAME_ENDED") {
+                // 1v1 Opponent Won
+                io.to(`game:${matchId}`).emit("game:playerLeft", { userId: socket.user._id, state: "RUNNING" });
+                io.to(`game:${matchId}`).emit("game:gameOver", {
+                    winnerId: result.winnerId,
+                    winningAmount: result.winnerAmount,
+                    reason: "Opponent surrendered"
+                });
+                socket.leave(`game:${matchId}`);
+            }
+            else if (result.action === "PLAYER_LEFT_GAME") {
+                // 4P etc
+                io.to(`game:${matchId}`).emit("game:playerLeft", { userId: socket.user._id, state: "RUNNING" });
+                socket.leave(`game:${matchId}`);
+
+                // If it was their turn, switch turn
+                const match = result.match;
+                if (match && match.currentTurn.userId.toString() === socket.user._id.toString()) {
+                    const nextTurn = await GameLogic.switchTurn(match);
+                    io.to(`game:${matchId}`).emit("game:turnChanged", nextTurn);
+                }
+            }
+
+        } catch (err) {
+            logger.error("Leave Error:", err);
+            socket.emit("error", { message: err.message || "Leave Error" });
         }
     });
 
