@@ -112,7 +112,13 @@ class MatchService {
             });
             await match.save();
 
-            return match;
+            const populatedMatch = await Match.findById(match._id)
+                .populate({
+                    path: "players.userId",
+                    select: "_id fullName playerStats avatar"
+                });
+
+            return populatedMatch;
         } catch (error) {
             // Rollback: Delete match
             await Match.deleteOne({ _id: match._id });
