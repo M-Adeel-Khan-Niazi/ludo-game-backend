@@ -35,7 +35,9 @@ module.exports = (io, socket) => {
             await match.save();
 
             const roomName = `game:${matchId}`;
-            socket.join(roomName);
+            if (!socket.rooms.has(roomName)) {
+                socket.join(roomName);
+            }
 
             socket.emit("game:state", match);
             socket.to(roomName).emit("game:playerJoined", {
@@ -141,7 +143,12 @@ module.exports = (io, socket) => {
                 createdAt: message.createdAt
             };
 
-            io.to(`game:${matchId}`).emit("game:messageReceived", messageData);
+            const roomName = `game:${matchId}`;
+            if (!socket.rooms.has(roomName)) {
+                socket.join(roomName);
+            }
+
+            io.to(roomName).emit("game:messageReceived", messageData);
 
         } catch (err) {
             logger.error("Chat Error:", err);
@@ -214,25 +221,30 @@ module.exports = (io, socket) => {
                 if (player.tokens.some(t => GameLogic.isValidMove(t, val, player, match))) hasValidMoves = true;
             });
 
+            const roomName = `game:${matchId}`;
+            if (!socket.rooms.has(roomName)) {
+                socket.join(roomName);
+            }
+
             if (!hasValidMoves) {
                 // If 2 dice and no moves (e.g. rolled 2,3 and all home), turn lost?
                 // Or if one moves, other doesn't?
                 // Logic: If NO moves possible for ANY die, turn ends.
                 // Standard Ludo: 6 gives turn.
                 // If I roll [2, 3] and can't move, turn skipped? Yes.
-
                 await match.save();
-                io.to(`game:${matchId}`).emit("game:diceRolled", { userId: socket.user._id, diceValues, hasValidMoves: false });
+
+                io.to(roomName).emit("game:diceRolled", { userId: socket.user._id, diceValues, hasValidMoves: false });
 
                 setTimeout(async () => {
                     const nextTurn = await GameLogic.switchTurn(match);
-                    io.to(`game:${matchId}`).emit("game:turnChanged", nextTurn);
+                    io.to(roomName).emit("game:turnChanged", nextTurn);
                 }, 15000);
                 return;
             }
 
             await match.save();
-            io.to(`game:${matchId}`).emit("game:diceRolled", { userId: socket.user._id, diceValues, hasValidMoves: true });
+            io.to(roomName).emit("game:diceRolled", { userId: socket.user._id, diceValues, hasValidMoves: true });
 
         } catch (err) {
             logger.error(err);
@@ -257,9 +269,14 @@ module.exports = (io, socket) => {
             // Apply Move
             const result = await GameLogic.applyMove(match, socket.user._id, tokenId, diceIndex);
 
+            const roomName = `game:${matchId}`;
+            if (!socket.rooms.has(roomName)) {
+                socket.join(roomName);
+            }
+
             if (result.groundedTokenId) {
                 // Emit penalty event
-                io.to(`game:${matchId}`).emit("game:tokenGrounded", {
+                io.to(roomName).emit("game:tokenGrounded", {
                     userId: socket.user._id,
                     tokenId: result.groundedTokenId,
                     message: "Token grounded for missed capture!"
@@ -267,7 +284,7 @@ module.exports = (io, socket) => {
             }
 
             // Emit Update
-            io.to(`game:${matchId}`).emit("game:tokenMoved", {
+            io.to(roomName).emit("game:tokenMoved", {
                 userId: socket.user._id,
                 tokenId,
                 diceIndex,
@@ -293,7 +310,7 @@ module.exports = (io, socket) => {
 
                 if (remainingHasMoves) {
                     // Continue turn
-                    io.to(`game:${matchId}`).emit("game:turnContinued", {
+                    io.to(roomName).emit("game:turnContinued", {
                         userId: socket.user._id,
                         message: "Please use remaining dice"
                     });
@@ -314,11 +331,11 @@ module.exports = (io, socket) => {
                 match.currentTurn.diceValues = [];
                 match.currentTurn.usedDiceIndices = [];
                 await match.save();
-                io.to(`game:${matchId}`).emit("game:turnContinued", { userId: socket.user._id, message: "Bonus Turn! Roll again." });
+                io.to(roomName).emit("game:turnContinued", { userId: socket.user._id, message: "Bonus Turn! Roll again." });
             } else {
                 // Switch Turn
                 const nextTurn = await GameLogic.switchTurn(match);
-                io.to(`game:${matchId}`).emit("game:turnChanged", nextTurn);
+                io.to(roomName).emit("game:turnChanged", nextTurn);
             }
 
         } catch (err) {
