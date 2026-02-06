@@ -51,6 +51,20 @@ class GameLogic {
      * @param {Number} diceValue 
      */
     /**
+     * Calculate global position for collision detection
+     */
+    toGlobalPosition(color, relativePos) {
+        if (relativePos === -1 || relativePos > 50) return null; // Home or Safe Home Path
+
+        let offset = 0;
+        if (color === 'green') offset = 13;
+        if (color === 'yellow') offset = 26;
+        if (color === 'blue') offset = 39;
+
+        return (relativePos + offset) % 52;
+    }
+
+    /**
      * Helper: Check if a global position has a Double (2+ tokens of same color)
      */
     isDouble(match, globalPos, excludeColor) {

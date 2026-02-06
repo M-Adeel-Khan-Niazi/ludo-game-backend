@@ -227,19 +227,32 @@ module.exports = (io, socket) => {
             }
 
             if (!hasValidMoves) {
-                // If 2 dice and no moves (e.g. rolled 2,3 and all home), turn lost?
-                // Or if one moves, other doesn't?
                 // Logic: If NO moves possible for ANY die, turn ends.
-                // Standard Ludo: 6 gives turn.
-                // If I roll [2, 3] and can't move, turn skipped? Yes.
-                await match.save();
 
+                await match.save();
                 io.to(roomName).emit("game:diceRolled", { userId: socket.user._id, diceValues, hasValidMoves: false });
 
+                // Optimization: If all tokens are at home, don't wait 15s. Change fast.
+                // Assuming GameLogic.STATE_HOME is -1.
+                const allTokensHome = player.tokens.every(t => t.position === -1);
+
+                const delay = allTokensHome ? 2000 : 15000;
+
                 setTimeout(async () => {
-                    const nextTurn = await GameLogic.switchTurn(match);
-                    io.to(roomName).emit("game:turnChanged", nextTurn);
-                }, 15000);
+                    // Re-fetch match to avoid stale state issues (though match obj is arguably fresh here, async wait suggests caution)
+                    // But here we just switch turn.
+                    const currentMatch = await Match.findById(matchId).populate({
+                        path: "players.userId",
+                        select: "_id fullName playerStats avatar"
+                    });
+                    if (!currentMatch || currentMatch.state !== "RUNNING") return;
+
+                    // Ensure it's still this user's turn (in case of weird race conditions, though unlikely with single thread node)
+                    if (currentMatch.currentTurn.userId.toString() === socket.user._id.toString()) {
+                        const nextTurn = await GameLogic.switchTurn(currentMatch);
+                        io.to(roomName).emit("game:turnChanged", nextTurn);
+                    }
+                }, delay);
                 return;
             }
 
