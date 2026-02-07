@@ -3,9 +3,9 @@ const Match = require("../models/Match");
 class GameLogic {
     constructor() {
         // Game Constants
-        this.PATH_LENGTH = 52; // Main board path steps
-        this.HOME_PATH_LENGTH = 6; // Steps to reach home center
-        this.TOTAL_STEPS = this.PATH_LENGTH + this.HOME_PATH_LENGTH; // 58 steps total (0 to 57)
+        this.PATH_LENGTH = 52; // Main board path steps (0-51)
+        this.HOME_PATH_LENGTH = 6; // Steps to reach home center (52-57)
+        this.TOTAL_STEPS = this.PATH_LENGTH + this.HOME_PATH_LENGTH; // 58 steps total
 
         // Token States
         this.STATE_HOME = -1; // In base
@@ -17,7 +17,6 @@ class GameLogic {
 
     /**
      * Roll 2 dice
-     * @returns {Array<Number>} [d1, d2]
      */
     rollDice() {
         return [
@@ -46,15 +45,10 @@ class GameLogic {
     }
 
     /**
-     * Validate if a move is possible for a specific dice value
-     * @param {Object} token - Token object from Match model
-     * @param {Number} diceValue 
-     */
-    /**
      * Calculate global position for collision detection
      */
     toGlobalPosition(color, relativePos) {
-        if (relativePos === -1 || relativePos > 50) return null; // Home or Safe Home Path
+        if (relativePos === -1 || relativePos > 51) return null; // Home or Safe Home Path
 
         let offset = 0;
         if (color === 'green') offset = 13;
@@ -68,14 +62,11 @@ class GameLogic {
      * Helper: Check if a global position has a Double (2+ tokens of same color)
      */
     isDouble(match, globalPos, excludeColor) {
-        // Check for any player having >= 2 tokens at this globalPos
         for (const p of match.players) {
-            // "excludeColor" usually means we are checking enemies. 
-            // If "excludeColor" is passed, we skip that color (e.g. self).
             if (p.color === excludeColor) continue;
 
             const tokensAtPos = p.tokens.filter(t => {
-                if (t.position === -1 || t.isFinished || t.position > 50) return false;
+                if (t.position === -1 || t.isFinished || t.position > 51) return false;
                 const gPos = this.toGlobalPosition(p.color, t.position);
                 return gPos === globalPos;
             });
@@ -96,46 +87,20 @@ class GameLogic {
         let potentialPos = token.position + diceValue;
 
         // Rule 5: Cannot go to home unless hit someone
-        // Entry to home is when position > 50.
-        // If !hasCaptured, wrap around instead of entering home.
-        if (!player.hasCaptured && potentialPos > 50) {
-            // Loop: 50 -> 0 (based on relative path)
-            // Example: pos 48, roll 5 -> 53 (home path 2).
-            // If !captured, should land on relative 1 (start + 1)?
-            // Relative path 0-51 (52 steps).
-            // 50 + 1 = 51 (last square). 50 + 2 = 52 (Home 0).
-            // Wrap logic: (pos + dice) % 52.
-            // But we need to be careful. The "Home Entrance" is at relative 50?
-            // Let's assume path is 0..50 (51 squares) + 51 (Home arrow) -> Home Path.
-            // "PATH_LENGTH = 52". Indices 0..51.
-            // Entrance is at 50? Or 51?
-            // Usually step 51 is the one before home.
-            // If pos + dice > 50, and !captured, we wrap:
-            // potentialPos = (token.position + diceValue) % 52;
-            potentialPos = (token.position + diceValue) % 52;
-        }
-
-        // Rule 6: Exact number for home
-        if (player.hasCaptured && potentialPos > 57) {
-            return false; // Loose those numbers
-        }
-
-        // If entering Home Path (51-56), check if valid
-        // 57 is destination (Center). > 57 invalid.
-
-        // Rule 3: Double Protection (No single coin can hit double coin)
-        // Check destination for Double
-        if (potentialPos <= 50) { // On main board
-            const globalDest = this.toGlobalPosition(player.color, potentialPos);
-            // Check if enemies have Double there
-            if (this.isDouble(match, globalDest, player.color)) {
-                // If I am single? Or always?
-                // Rule: "No single Coin can hit double coin".
-                // Assuming moving single.
-                // If I land on double -> Invalid Move (Safe).
-                return false;
+        if (potentialPos > 51) {
+            if (!player.hasCaptured) {
+                // Wrap around 52 -> 0
+                // (51 + 1) % 52 = 0
+                potentialPos = potentialPos % 52;
+            } else {
+                // Enter Home Path
+                if (potentialPos > 57) return false; // Exact throw needed
             }
         }
+
+        // Rule 3: Double Protection (No single coin can hit double coin)
+        // Correction: Move is SAFE, not INVALID. You can land on double, just not capture.
+        // So we do NOT return false here.
 
         return true;
     }
@@ -146,13 +111,12 @@ class GameLogic {
     checkCapture(match, player, token, diceValue) {
         if (token.position === this.STATE_HOME && diceValue !== 6) return false;
         if (token.position === this.STATE_HOME && diceValue === 6) {
-            // Rule 1 Part 2: Opening with 6 -> Cannot hit (Safe).
-            return false;
+            return false; // Safe exit
         }
 
         let potentialPos = token.position + diceValue;
-        if (!player.hasCaptured && potentialPos > 50) potentialPos %= 52;
-        if (potentialPos > 50) return false; // In safe zone/home path
+        if (!player.hasCaptured && potentialPos > 51) potentialPos %= 52;
+        if (potentialPos > 51) return false; // In safe zone/home path
 
         const globalDest = this.toGlobalPosition(player.color, potentialPos);
         if (this.SAFE_ZONES.includes(globalDest)) return false;
@@ -160,8 +124,13 @@ class GameLogic {
         // Check for enemies
         for (const p of match.players) {
             if (p.userId.toString() === player.userId.toString()) continue;
+
+            // Check doubles logic here:
+            // If enemy has double at destination -> NO Capture.
+            if (this.isDouble(match, globalDest, player.color)) return false;
+
             for (const t of p.tokens) {
-                if (t.position === -1 || t.isFinished || t.position > 50) continue;
+                if (t.position === -1 || t.isFinished || t.position > 51) continue;
                 const gPos = this.toGlobalPosition(p.color, t.position);
                 if (gPos === globalDest) return true;
             }
@@ -187,24 +156,16 @@ class GameLogic {
 
         // Rule 4: Forced Hit (Huff) Check logic
         let missedTokenId = null;
+        // Check if ANY other token could have captured with THIS dice
         for (const t of player.tokens) {
-            if (t.isFinished) continue;
-            // potential capture with SAME dice?
+            if (t.isFinished || t.tokenId === tokenId) continue;
+
             if (this.isValidMove(t, diceValue, player, match) && this.checkCapture(match, player, t, diceValue)) {
-                // 't' could capture.
-                if (t.tokenId !== tokenId) {
-                    // Start Move didn't capture (or different token used).
-                    // Even if the CHOSEN move captures, if another token could ALSO capture, is it a miss?
-                    // "If you forget to hit". If I hit with A, I didn't forget.
-                    // So if current move IS a capture, then no penalty?
-                    // But we don't know if current move is capture yet.
-                    // We can check `this.checkCapture` for current `token` too.
-                    if (this.checkCapture(match, player, token, diceValue)) {
-                        // Chosen move captures. No penalty.
-                    } else {
-                        // Chosen move does NOT capture. But 't' COULD.
-                        missedTokenId = t.tokenId;
-                    }
+                // 't' could have captured.
+                // Did the chosen move capture?
+                if (!this.checkCapture(match, player, token, diceValue)) {
+                    // Missed opportunity!
+                    missedTokenId = t.tokenId;
                 }
             }
         }
@@ -213,11 +174,8 @@ class GameLogic {
         if (missedTokenId) {
             const groundedToken = player.tokens.find(t => t.tokenId === missedTokenId);
             if (groundedToken) {
-                groundedToken.position = -1; // Grounded
+                groundedToken.position = -1;
             }
-            // Turn continues with the move?
-            // "your coin... will be grounded".
-            // Usually move happens too.
         }
 
         // Execute Move
@@ -229,10 +187,14 @@ class GameLogic {
             token.position = 0;
         } else {
             let nextPos = token.position + diceValue;
-            if (!player.hasCaptured && nextPos > 50) {
-                token.position = (token.position + diceValue) % 52;
+            if (nextPos > 51) {
+                if (!player.hasCaptured) {
+                    token.position = nextPos % 52;
+                } else {
+                    token.position = nextPos;
+                }
             } else {
-                token.position += diceValue;
+                token.position = nextPos;
             }
         }
 
@@ -243,40 +205,33 @@ class GameLogic {
         }
 
         // Check Capture
-        if (!finished && token.position <= 50) {
-            // Rule 1 Exception: If opening move (wasHome), NO capture.
+        if (!finished && token.position <= 51) {
             if (!wasHome) {
                 const globalPos = this.toGlobalPosition(player.color, token.position);
-                if (!this.SAFE_ZONES.includes(globalPos)) {
+                if (globalPos !== null && !this.SAFE_ZONES.includes(globalPos)) {
                     // Check enemies
                     for (const otherPlayer of match.players) {
                         if (otherPlayer.userId.toString() === userId.toString()) continue;
 
                         let enemyTokensAtPos = [];
                         for (const ot of otherPlayer.tokens) {
-                            if (ot.position !== -1 && !ot.isFinished && ot.position <= 50) {
+                            if (ot.position !== -1 && !ot.isFinished && ot.position <= 51) {
                                 if (this.toGlobalPosition(otherPlayer.color, ot.position) === globalPos) {
                                     enemyTokensAtPos.push(ot);
                                 }
                             }
                         }
 
-                        // Rule 3: Double vs Single.
-                        // If enemies have >= 2 tokens -> Double. Safe.
-                        // My token arrived.
                         if (enemyTokensAtPos.length > 0) {
+                            // Rule 3: Double vs Single.
                             if (enemyTokensAtPos.length >= 2) {
-                                // Safe. No capture.
-                                // "No single coin can hit double coin".
-                                // Effectively, they co-exist? Or was move invalid?
-                                // I made move invalid in isValidMove. So this shouldn't happen?
-                                // Yes, isDouble check in isValidMove prevents this branch.
+                                // Double -> Safe. No capture.
                             } else {
                                 // Capture Single
                                 enemyTokensAtPos.forEach(ot => ot.position = -1);
                                 captured = true;
                                 bonusTurn = true;
-                                player.hasCaptured = true; // Rule 5 satisfied
+                                player.hasCaptured = true;
                             }
                         }
                     }
@@ -294,7 +249,19 @@ class GameLogic {
 
         const allDiceUsed = match.currentTurn.diceValues.length === match.currentTurn.usedDiceIndices.length;
 
-        return { captured, finished, bonusTurn, allDiceUsed, match, groundedTokenId, pendingBonus: match.currentTurn.pendingBonus };
+        // Check Win Condition
+        const winnerId = this.checkWinCondition(match);
+
+        return {
+            captured,
+            finished,
+            bonusTurn,
+            allDiceUsed,
+            match,
+            missedTokenId, // Fixed Name
+            pendingBonus: match.currentTurn.pendingBonus,
+            winnerId
+        };
     }
 
     async switchTurn(match) {
@@ -306,14 +273,36 @@ class GameLogic {
                 diceValues: [],
                 usedDiceIndices: [],
                 rollCount: 0,
-                pendingBonus: false
+                pendingBonus: false,
+                turnDeadline: new Date(Date.now() + 15000) // 15s Timer
             };
             await match.save();
         }
         return match.currentTurn;
     }
+
+    checkWinCondition(match) {
+        // 1v1 or 4P
+        if (match.gameType === "1V1" || match.gameType === "4P") {
+            const finishedPlayer = match.players.find(p => p.tokens.every(t => t.isFinished));
+            if (finishedPlayer) return finishedPlayer.userId;
+        }
+        // 2v2
+        if (match.gameType === "2V2") {
+            // Check if any team has won
+            for (let teamId of [1, 2]) {
+                const teamPlayers = match.players.filter(p => p.team === teamId);
+                if (teamPlayers.length > 0 && teamPlayers.every(p => p.tokens.every(t => t.isFinished))) {
+                    // For 2v2, we need a single winner ID to return? Or handle logically.
+                    // The schema has `winner` as ObjectId.
+                    // We can set it to the first player of the team, or handle team logic elsewhere.
+                    // Returning first player ID for now.
+                    return teamPlayers[0].userId;
+                }
+            }
+        }
+        return null;
+    }
 }
-
-
 
 module.exports = new GameLogic();

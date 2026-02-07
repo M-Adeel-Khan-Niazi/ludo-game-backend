@@ -2,6 +2,8 @@ const Match = require("../models/Match");
 const GameLogic = require("../services/game.logic");
 const logger = require("../config/logger");
 const MatchService = require("../services/match.service");
+const { getMatchLock } = require("../utils/lock");
+const mongoose = require("mongoose");
 
 // Global disconnect timeouts map
 const disconnectTimeouts = new Map();
@@ -192,6 +194,11 @@ module.exports = (io, socket) => {
 
     // Roll Dice
     socket.on("game:rollDice", async ({ matchId }) => {
+        if (!mongoose.Types.ObjectId.isValid(matchId)) return socket.emit("error", { message: "Invalid ID" });
+
+        const lock = getMatchLock(matchId);
+        const release = await lock.acquire();
+
         try {
             const match = await Match.findById(matchId);
             if (!match) return socket.emit("error", { message: "Match not found" });
@@ -201,7 +208,7 @@ module.exports = (io, socket) => {
                 return socket.emit("error", { message: "Not your turn" });
             }
 
-            // If already has dice values and not all used, prevent re-roll (unless logic allows?)
+            // check if already rolled and not used
             if (match.currentTurn.diceValues && match.currentTurn.diceValues.length > 0 &&
                 match.currentTurn.usedDiceIndices.length < match.currentTurn.diceValues.length) {
                 return socket.emit("error", { message: "Dice already rolled, please move" });
@@ -212,46 +219,40 @@ module.exports = (io, socket) => {
             match.currentTurn.diceValues = diceValues;
             match.currentTurn.usedDiceIndices = [];
 
+            // Fix 11: Turn Timer (Reset on roll)
+            match.currentTurn.turnDeadline = new Date(Date.now() + 15000); // 15s to move
+
             // Auto-check moves
             const player = match.players.find(p => p.userId.toString() === socket.user._id.toString());
-
-            // Check valid moves for ANY die
             let hasValidMoves = false;
             diceValues.forEach(val => {
                 if (player.tokens.some(t => GameLogic.isValidMove(t, val, player, match))) hasValidMoves = true;
             });
 
             const roomName = `game:${matchId}`;
-            if (!socket.rooms.has(roomName)) {
-                socket.join(roomName);
-            }
+            if (!socket.rooms.has(roomName)) socket.join(roomName);
 
             if (!hasValidMoves) {
-                // Logic: If NO moves possible for ANY die, turn ends.
-
                 await match.save();
                 io.to(roomName).emit("game:diceRolled", { userId: socket.user._id, diceValues, hasValidMoves: false });
 
-                // Optimization: If all tokens are at home, don't wait 15s. Change fast.
-                // Assuming GameLogic.STATE_HOME is -1.
                 const allTokensHome = player.tokens.every(t => t.position === -1);
-
-                const delay = allTokensHome ? 2000 : 15000;
+                const delay = allTokensHome ? 2000 : 3000; // Faster turn switch
 
                 setTimeout(async () => {
-                    // Re-fetch match to avoid stale state issues (though match obj is arguably fresh here, async wait suggests caution)
-                    // But here we just switch turn.
-                    const currentMatch = await Match.findById(matchId).populate({
-                        path: "players.userId",
-                        select: "_id fullName playerStats avatar"
-                    });
-                    if (!currentMatch || currentMatch.state !== "RUNNING") return;
-
-                    // Ensure it's still this user's turn (in case of weird race conditions, though unlikely with single thread node)
-                    if (currentMatch.currentTurn.userId.toString() === socket.user._id.toString()) {
-                        const nextTurn = await GameLogic.switchTurn(currentMatch);
-                        io.to(roomName).emit("game:turnChanged", nextTurn);
-                    }
+                    // Lock again for switch?
+                    // Async flow... tricky inside timeout. 
+                    // Best effort:
+                    const switchLock = getMatchLock(matchId);
+                    const switchRelease = await switchLock.acquire();
+                    try {
+                        const currentMatch = await Match.findById(matchId);
+                        if (!currentMatch || currentMatch.state !== "RUNNING") return;
+                        if (currentMatch.currentTurn.userId.toString() === socket.user._id.toString()) {
+                            const nextTurn = await GameLogic.switchTurn(currentMatch);
+                            io.to(roomName).emit("game:turnChanged", nextTurn);
+                        }
+                    } finally { switchRelease(); }
                 }, delay);
                 return;
             }
@@ -262,11 +263,18 @@ module.exports = (io, socket) => {
         } catch (err) {
             logger.error(err);
             socket.emit("error", { message: err.message || "Roll Error" });
+        } finally {
+            release();
         }
     });
 
     // Move Token
     socket.on("game:moveToken", async ({ matchId, tokenId, diceIndex }) => {
+        if (!mongoose.Types.ObjectId.isValid(matchId)) return socket.emit("error", { message: "Invalid ID" });
+
+        const lock = getMatchLock(matchId);
+        const release = await lock.acquire();
+
         try {
             const match = await Match.findById(matchId);
             if (!match) return socket.emit("error", { message: "Match not found" });
@@ -275,23 +283,16 @@ module.exports = (io, socket) => {
                 return socket.emit("error", { message: "Not your turn" });
             }
 
-            if (!match.currentTurn.diceValues || match.currentTurn.diceValues.length === 0) {
-                return socket.emit("error", { message: "Roll dice first" });
-            }
-
             // Apply Move
             const result = await GameLogic.applyMove(match, socket.user._id, tokenId, diceIndex);
 
             const roomName = `game:${matchId}`;
-            if (!socket.rooms.has(roomName)) {
-                socket.join(roomName);
-            }
+            if (!socket.rooms.has(roomName)) socket.join(roomName);
 
-            if (result.groundedTokenId) {
-                // Emit penalty event
+            if (result.missedTokenId) {
                 io.to(roomName).emit("game:tokenGrounded", {
                     userId: socket.user._id,
-                    tokenId: result.groundedTokenId,
+                    tokenId: result.missedTokenId,
                     message: "Token grounded for missed capture!"
                 });
             }
@@ -308,52 +309,71 @@ module.exports = (io, socket) => {
                 finished: result.finished
             });
 
-            // Check what to do next
-            // 1. Are there unused dice?
-            const unusedIndices = match.currentTurn.diceValues.map((_, i) => i)
-                .filter(i => !match.currentTurn.usedDiceIndices.includes(i));
+            // Check Win
+            if (result.winnerId) {
+                const { prize } = await MatchService.settleGame(match, result.winnerId);
+                io.to(roomName).emit("game:gameOver", { winnerId: result.winnerId, prize, reason: "NATURAL_WIN" });
+                return;
+            }
 
-            if (unusedIndices.length > 0) {
-                // Check if remaining dice have valid moves
-                const player = match.players.find(p => p.userId.toString() === socket.user._id.toString());
-                const remainingHasMoves = unusedIndices.some(idx => {
-                    const val = match.currentTurn.diceValues[idx];
-                    return player.tokens.some(t => GameLogic.isValidMove(t, val, player, match));
-                });
+            // Fix 9: Stack limit?
+            // Fix 6: Bonus only if used 6
+            const usedDiceValue = match.currentTurn.diceValues[diceIndex];
+            const rolledSix = usedDiceValue === 6;
+
+            if (result.bonusTurn || rolledSix) {
+                // Bonus Logic
+                match.currentTurn.rollCount++;
+
+                if (match.currentTurn.rollCount >= 3) {
+                    // Too many 6s (or bonuses), forfeit turn? 
+                    // Usually only consecutive 6s count. Capture bonus is separate?
+                    // Ludo Star: 3 consecutive 6s = forfeit. Capture/Home gives extra turn but doesn't count towards "3x6" penalty?
+                    // Let's implement simplistic: 3 consecutive bonus actions = forfeit.
+                    const nextTurn = await GameLogic.switchTurn(match);
+                    io.to(roomName).emit("game:turnChanged", nextTurn);
+                    return;
+                }
+
+                // Reset Dice for new roll
+                match.currentTurn.diceValues = [];
+                match.currentTurn.usedDiceIndices = [];
+                // Reset timer for bonus roll
+                match.currentTurn.turnDeadline = new Date(Date.now() + 15000);
+
+                await match.save();
+                io.to(roomName).emit("game:turnContinued", { userId: socket.user._id, message: "Bonus Turn! Roll again." });
+            } else {
+                // Check if unused dice exist
+                const unusedIndices = match.currentTurn.diceValues.map((_, i) => i)
+                    .filter(i => !match.currentTurn.usedDiceIndices.includes(i));
+
+                let remainingHasMoves = false;
+                if (unusedIndices.length > 0) {
+                    const player = match.players.find(p => p.userId.toString() === socket.user._id.toString());
+                    remainingHasMoves = unusedIndices.some(idx => {
+                        const val = match.currentTurn.diceValues[idx];
+                        return player.tokens.some(t => GameLogic.isValidMove(t, val, player, match));
+                    });
+                }
 
                 if (remainingHasMoves) {
-                    // Continue turn
                     io.to(roomName).emit("game:turnContinued", {
                         userId: socket.user._id,
                         message: "Please use remaining dice"
                     });
-                    return;
+                } else {
+                    // Switch
+                    const nextTurn = await GameLogic.switchTurn(match);
+                    io.to(roomName).emit("game:turnChanged", nextTurn);
                 }
-            }
-
-            // If we are here, either all dice used OR remaining dice unusable.
-
-            // Check Bonus for Re-roll
-            // If they rolled a 6 (any of the 2 dice?), or captured/finished?
-            const rolledSix = match.currentTurn.diceValues.includes(6); // Simplified rule: Any 6 gives bonus?
-            // Or only if 6 was used? Usually if you roll 6, you get another turn.
-
-            if (result.bonusTurn || rolledSix) {
-                // Bonus!
-                // Reset Dice for new roll
-                match.currentTurn.diceValues = [];
-                match.currentTurn.usedDiceIndices = [];
-                await match.save();
-                io.to(roomName).emit("game:turnContinued", { userId: socket.user._id, message: "Bonus Turn! Roll again." });
-            } else {
-                // Switch Turn
-                const nextTurn = await GameLogic.switchTurn(match);
-                io.to(roomName).emit("game:turnChanged", nextTurn);
             }
 
         } catch (err) {
             logger.error(err);
             socket.emit("error", { message: err.message || "Move Error" });
+        } finally {
+            release();
         }
     });
 
@@ -363,50 +383,76 @@ module.exports = (io, socket) => {
             if (!socket.user) return;
             const userId = socket.user._id.toString();
 
-            // Find active matches for this user
             const matches = await Match.find({
                 "players.userId": userId,
                 state: "RUNNING"
             });
 
             for (const match of matches) {
-                const player = match.players.find(p => p.userId.toString() === userId);
-                if (player) {
-                    player.status = "DISCONNECTED";
-                    player.disconnectedAt = new Date();
-                    await match.save();
+                // Fix 10: Unique timeout key
+                const timeoutKey = `${userId}_${match._id}`;
 
-                    io.to(`game:${match._id}`).emit("game:playerDisconnected", { userId, message: "Player disconnected. 2 minutes to rejoin." });
+                const lock = getMatchLock(match._id.toString());
+                const release = await lock.acquire();
 
-                    // Set Timeout
-                    const timeoutId = setTimeout(async () => {
-                        try {
-                            const currentMatch = await Match.findById(match._id);
-                            if (!currentMatch || currentMatch.state !== "RUNNING") return;
+                try {
+                    const player = match.players.find(p => p.userId.toString() === userId);
+                    if (player) {
+                        player.status = "DISCONNECTED";
+                        player.disconnectedAt = new Date();
+                        await match.save();
 
-                            const p = currentMatch.players.find(p => p.userId.toString() === userId);
-                            if (p && p.status === "DISCONNECTED") {
-                                p.status = "DISQUALIFIED"; // Or LEFT
-                                // Remove tokens?
-                                p.tokens.forEach(t => t.position = -1); // Or remove completely?
-                                // "disqualified and will be out from the game"
+                        io.to(`game:${match._id}`).emit("game:playerDisconnected", { userId, message: "Player disconnected. 2 minutes to rejoin." });
 
-                                await currentMatch.save();
-                                io.to(`game:${match._id}`).emit("game:playerDisqualified", { userId, message: "Player disqualified due to timeout." });
+                        const timeoutId = setTimeout(async () => {
+                            const toLock = getMatchLock(match._id.toString());
+                            const toRelease = await toLock.acquire();
+                            try {
+                                const currentMatch = await Match.findById(match._id);
+                                if (!currentMatch || currentMatch.state !== "RUNNING") return;
 
-                                // If it was their turn, switch
-                                if (currentMatch.currentTurn.userId.toString() === userId) {
-                                    const nextTurn = await GameLogic.switchTurn(currentMatch);
-                                    io.to(`game:${match._id}`).emit("game:turnChanged", nextTurn);
+                                const p = currentMatch.players.find(p => p.userId.toString() === userId);
+                                // Check if still disconnected
+                                if (p && p.status === "DISCONNECTED") {
+                                    p.status = "DISQUALIFIED";
+                                    p.tokens.forEach(t => t.position = -1);
+
+                                    await currentMatch.save();
+                                    io.to(`game:${match._id}`).emit("game:playerDisqualified", { userId, message: "Player disqualified due to timeout." });
+
+                                    // Check Last Man Standing
+                                    const remaining = currentMatch.players.filter(pp => !["LEFT", "DISQUALIFIED", "DISCONNECTED"].includes(pp.status));
+                                    // Note: DISCONNECTED players are still theoretically in game until timeout.
+                                    // If we have 1 ACTIVE and 1 DISCONNECTED... we wait.
+                                    // If we disqualify this one, and only 1 ACTIVE remains? All others are LEFT/DISQ.
+
+                                    // But wait, what if 2 ACTIVE? OK.
+
+                                    const functionalPlayers = currentMatch.players.filter(pp => !["LEFT", "DISQUALIFIED"].includes(pp.status));
+                                    // If functional == 1 (The winner).
+                                    // Wait, if Disconnected players exist, they are "functional" but offline.
+                                    // If I disqualify P1. P2 is Active. P3 is Disconnected (timeout pending).
+                                    // functional = [P2, P3]. Length 2. Game continues. Correct.
+
+                                    if (functionalPlayers.length === 1 && currentMatch.players.length > 1) {
+                                        const winnerId = functionalPlayers[0].userId;
+                                        const { prize } = await MatchService.settleGame(currentMatch, winnerId);
+                                        io.to(`game:${match._id}`).emit("game:gameOver", { winnerId, prize, reason: "Last Man Standing" });
+                                        return;
+                                    }
+
+                                    if (currentMatch.currentTurn.userId.toString() === userId) {
+                                        const nextTurn = await GameLogic.switchTurn(currentMatch);
+                                        io.to(`game:${match._id}`).emit("game:turnChanged", nextTurn);
+                                    }
                                 }
-                            }
-                        } catch (e) {
-                            logger.error("Timeout Error", e);
-                        }
-                    }, 2 * 60 * 1000); // 2 minutes
+                            } catch (e) { logger.error("Timeout Error", e); }
+                            finally { toRelease(); }
+                        }, 2 * 60 * 1000);
 
-                    disconnectTimeouts.set(userId, timeoutId);
-                }
+                        disconnectTimeouts.set(timeoutKey, timeoutId);
+                    }
+                } finally { release(); }
             }
         } catch (err) {
             logger.error("Disconnect Error", err);

@@ -7,7 +7,11 @@ const logger = require("./src/config/logger");
 
 const server = require("http").createServer(app);
 
-initSocket(server);
+const io = initSocket(server);
+global.io = io;
+
+// Start Cron Jobs
+require("./src/cron/game.cron");
 
 connectDB();
 

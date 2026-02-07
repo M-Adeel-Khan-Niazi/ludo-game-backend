@@ -16,7 +16,8 @@ const MatchSchema = new Schema(
       color: { type: String, enum: ["red", "green", "yellow", "blue"] },
       userId: { type: Schema.Types.ObjectId, ref: "User" },
       team: { type: Number, default: null }, // 1 or 2 (for 2v2)
-      status: { type: String, enum: ["ACTIVE", "LEFT", "DISCONNECTED"] },
+      status: { type: String, enum: ["ACTIVE", "LEFT", "DISCONNECTED", "DISQUALIFIED", "WON"] },
+      isHost: { type: Boolean, default: false }, // Rule-14
       hasCaptured: { type: Boolean, default: false }, // Rule-5: Need capture to enter home
       disconnectedAt: { type: Date, default: null }, // Rule-9: 2m timeout
       tokens: [
@@ -35,13 +36,15 @@ const MatchSchema = new Schema(
       diceValues: [{ type: Number }], // Array of rolled values e.g. [3, 5]
       usedDiceIndices: [{ type: Number }], // Array of indices of used dice e.g. [0]
       rollCount: { type: Number, default: 0 }, // Track rolls if implementing 3x 6s rule
-      pendingBonus: { type: Boolean, default: false } // Track if a bonus (capture/finish) was triggered
+      pendingBonus: { type: Boolean, default: false }, // Track if a bonus (capture/finish) was triggered
+      turnDeadline: { type: Date } // Rule-11 & 17: Turn Timer persistence
     },
 
     winner: { type: Schema.Types.ObjectId, ref: "User" },
     winningAmount: { type: Number, default: 0 },
 
     adminProfit: { type: Number, default: 0 },
+    lastActionSerial: { type: Number, default: 0 }, // Rule-16: Optimistic locking / Order check
     state: {
       type: String,
       enum: ["WAITING", "RUNNING", "COMPLETED", "CANCELLED"]

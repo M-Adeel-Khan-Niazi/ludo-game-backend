@@ -10,71 +10,7 @@ class MatchService {
     /**
      * Create a new match (Private or Public)
      */
-    async createMatch(userId, gameType, joiningFee, isPrivate, playersCount) {
-        if (joiningFee < 0) throw new Error("Invalid joining fee");
 
-        // Determine max players based on game type if not provided
-        let maxPlayers = playersCount || 2;
-        if (gameType === "4P") maxPlayers = 4;
-        if (gameType === "2V2") maxPlayers = 4;
-
-        const roomCode = generateRoomCode();
-
-        // We need to lock coins for the creator immediately
-        // This ensures they have funds before creating
-        // Using a transaction for atomicity: Create Match + Lock Coins
-        return WalletService.withTransaction(async (session) => {
-            // Lock coins
-            await WalletService.joinGame(userId, joiningFee, roomCode /** passing roomCode as temp matchId or we generate ID first? */);
-            // Only passing roomCode might be an issue if transaction expects ObjectId for matchId. 
-            // WalletService expects matchId. Let's create Match first with a generated ID.
-
-            const matchId = new mongoose.Types.ObjectId();
-
-            // Re-calling joinGame with actual ID. 
-            // NOTE: WalletService joinGame implementation needs to be compatible. 
-            // It takes (userId, amount, matchId).
-
-            // We must update the joinGame call to use the pre-generated ID
-            // But wait, WalletService.joinGame starts its own transaction. 
-            // Nested transactions are tricky. 
-            // My WalletService.withTransaction handles session. 
-            // But WalletService.joinGame calls `this.withTransaction` too.
-            // MongoDB supports nested transaction if we pass the session.
-            // But my WalletService implementation creates a NEW session if I call joinGame directly.
-
-            // FIX: I should call the logic of locking coins inside THIS transaction, 
-            // reusing the WalletService logic if refactored, or just calling it if it supports session injection.
-            // Looking at WalletService: it does `this.withTransaction(...)`. 
-            // It does NOT support passing an external session easily in the current signature `joinGame(userId, amount, matchId)`.
-
-            // For now, to keep it simple and safe, checking balance and strictly ordering operations:
-            // 1. Lock coins (User commits)
-            // 2. Create Match
-            // If 2 fails, we need to rollback 1.
-
-            // Since I can't easily inject session into joinGame without refactoring it (which I recently wrote),
-            // I will choose this path:
-            // Refactor WalletService triggers a lot of changes.
-            // Alternative: Create Match FIRST (Status WAITING). 
-            // THEN Lock Coins. If Lock fails, DELETE Match.
-
-            // Better: Refactor WalletService to accept optional session? 
-            // Or just trust the sequence:
-            // PENDING_MATCH -> Lock -> ACTIVE_MATCH.
-
-            // Let's go with: 
-            // 1. Create Match object (not saved yet).
-            // 2. Lock Coins (WalletService.joinGame). This is atomic on its own.
-            // 3. Save Match.
-            // If 3 fails, we have locked coins for a non-existent match. That's bad.
-
-            // Best approach given constraints:
-            // Use WalletService.joinGame. If successful, it returns logic.
-            // But we need the Match ID for joinGame.
-        });
-        // The snippet above was just thinking. Real code below.
-    }
 
     // Real Implementation that handles the transaction issue by doing it properly:
     // We will assume WalletService.joinGame is atomic.
@@ -108,7 +44,13 @@ class MatchService {
                 color,
                 status: "ACTIVE",
                 team: 1,
-                isHost: true // If we had this field, good. Metadata.
+                isHost: true, // Rule-14: Metadata
+                tokens: [
+                    { tokenId: `${color[0].toUpperCase()}1`, position: -1, isFinished: false },
+                    { tokenId: `${color[0].toUpperCase()}2`, position: -1, isFinished: false },
+                    { tokenId: `${color[0].toUpperCase()}3`, position: -1, isFinished: false },
+                    { tokenId: `${color[0].toUpperCase()}4`, position: -1, isFinished: false }
+                ]
             });
             await match.save();
 
@@ -158,9 +100,16 @@ class MatchService {
 
         match.players.push({
             userId,
-            color: match.gameType === "1V1" ? 'yellow' : nextColor,
+            color: match.gameType === "1V1" ? 'yellow' : nextColor, // 1v1 usually Red vs Yellow
             status: "ACTIVE",
-            team: match.gameType === "2V2" ? (match.players.length % 2) + 1 : null
+            team: match.gameType === "2V2" ? (match.players.length % 2) + 1 : null,
+            isHost: false,
+            tokens: [
+                { tokenId: `${(match.gameType === "1V1" ? 'yellow' : nextColor)[0].toUpperCase()}1`, position: -1, isFinished: false },
+                { tokenId: `${(match.gameType === "1V1" ? 'yellow' : nextColor)[0].toUpperCase()}2`, position: -1, isFinished: false },
+                { tokenId: `${(match.gameType === "1V1" ? 'yellow' : nextColor)[0].toUpperCase()}3`, position: -1, isFinished: false },
+                { tokenId: `${(match.gameType === "1V1" ? 'yellow' : nextColor)[0].toUpperCase()}4`, position: -1, isFinished: false }
+            ]
         });
 
         // Check if full
@@ -264,19 +213,82 @@ class MatchService {
 
             // Rule 3: Other matches -> Mark as LEFT
             player.status = "LEFT";
-            // For 4P, if you leave, you lose your fee. 
             await WalletService.settleLoss(userId, match.joiningFee, match._id);
 
-            // Tokens removed logic? 
-            // Usually tokens are removed or sit dead. 
-            // In game.socket disconnect logic, tokens are set to -1 (home).
             player.tokens.forEach(t => t.position = -1);
-
             await match.save();
+
+            // Check if only 1 player remaining (Last Man Standing)
+            const activePlayers = match.players.filter(p => p.status === "ACTIVE" || p.status === "DISCONNECTED");
+            // Wait, DISCONNECTED might rejoin. But if ACTIVE == 1 and all others LEFT?
+            // "If 3 out of 4 players leave/disconnect".
+            // If disconnected, they have timeouts running. 
+            // If LEFT, they are gone.
+            // If only 1 ACTIVE + DISCONNECTED? 
+            // We should only settle if *everyone else* has LEFT or DISQUALIFIED.
+
+            const remaining = match.players.filter(p => !["LEFT", "DISQUALIFIED"].includes(p.status));
+
+            if (remaining.length === 1) {
+                const winnerId = remaining[0].userId;
+                // Settle
+                const { prize } = await this.settleGame(match, winnerId);
+                return { action: "GAME_ENDED", winnerId, winnerAmount: prize, reason: "Last Man Standing", match };
+            }
+
             return { action: "PLAYER_LEFT_GAME", match };
         }
 
         return { action: "NO_ACTION" };
+    }
+
+    /**
+     * Settle game for a natural win
+     */
+    async settleGame(match, winnerId) {
+        if (match.state === "COMPLETED") return;
+
+        const winner = match.players.find(p => p.userId.toString() === winnerId.toString());
+        if (!winner) throw new Error("Winner not found in match");
+
+        // Prize Calculation
+        const pool = match.joiningFee * match.players.length;
+        // Note: For 4P it might be different, but assuming winner takes all for simplicty or standard 1v1
+        const prize = Math.floor(pool * match.winningMultiplier);
+        const adminDiff = pool - prize;
+
+        // Validating losing players (all others)
+        // In 1v1, loser lost fee on entry (locked), so nothing to deduct?
+        // WalletService.joinGame locks the fee (deducts it?). If so, we just add prize to winner.
+        // If joinGame just 'locks' but doesn't deduct, then we need to deduct from losers.
+        // Assuming joinGame DEDUCTS:
+        // We just need to CREDIT the winner.
+
+        // Wait, look at leaveMatch logic:
+        // settleLoss(leaver) -> settleWin(winner).
+        // If joinGame deduces, why settleLoss? Maybe 'settleLoss' logs it or finalizes it?
+        // Let's assume we need to call settleWin for winner.
+
+        await WalletService.settleWin(winnerId, match.joiningFee, prize, match._id);
+
+        // For others, do we need to call settleLoss?
+        // If they played and lost, maybe yes.
+        for (const p of match.players) {
+            if (p.userId.toString() !== winnerId.toString()) {
+                await WalletService.settleLoss(p.userId, match.joiningFee, match._id);
+                // p.status = "LOST"; // Enum doesn't have LOST, keep ACTIVE or update schema
+            } else {
+                p.status = "WON";
+            }
+        }
+
+        match.winner = winnerId;
+        match.winningAmount = prize;
+        match.adminProfit = (match.adminProfit || 0) + adminDiff;
+        match.state = "COMPLETED";
+
+        await match.save();
+        return { prize, adminDiff };
     }
 }
 
