@@ -194,7 +194,8 @@ module.exports = (io, socket) => {
 
     // Roll Dice
     socket.on("game:rollDice", async ({ matchId }) => {
-        if (!mongoose.Types.ObjectId.isValid(matchId)) return socket.emit("error", { message: "Invalid ID" });
+        if (!mongoose.Types.ObjectId.isValid(matchId))
+            return socket.emit("error", { message: "Invalid ID" });
 
         const lock = getMatchLock(matchId);
         const release = await lock.acquire();
@@ -202,53 +203,100 @@ module.exports = (io, socket) => {
         try {
             const match = await Match.findById(matchId);
             if (!match) return socket.emit("error", { message: "Match not found" });
-            if (match.state !== "RUNNING") return socket.emit("error", { message: "Game not running" });
+            if (match.state !== "RUNNING")
+                return socket.emit("error", { message: "Game not running" });
 
-            if (match.currentTurn.userId.toString() !== socket.user._id.toString()) {
+            if (match.currentTurn.userId.toString() !== socket.user._id.toString())
                 return socket.emit("error", { message: "Not your turn" });
-            }
 
-            // check if already rolled and not used
-            if (match.currentTurn.diceValues && match.currentTurn.diceValues.length > 0 &&
-                match.currentTurn.usedDiceIndices.length < match.currentTurn.diceValues.length) {
+            // Guard: must be in rolling phase
+            if (!match.currentTurn.rollingPhase)
                 return socket.emit("error", { message: "Dice already rolled, please move" });
-            }
 
-            const diceValues = GameLogic.rollDice(); // Returns [d1, d2]
+            const latestRoll = GameLogic.rollDice();
 
-            match.currentTurn.diceValues = diceValues;
-            match.currentTurn.usedDiceIndices = [];
-
-            // Fix 11: Turn Timer (Reset on roll)
-            match.currentTurn.turnDeadline = new Date(Date.now() + 15000); // 15s to move
-
-            // Auto-check moves
-            const player = match.players.find(p => p.userId.toString() === socket.user._id.toString());
-            let hasValidMoves = false;
-            diceValues.forEach(val => {
-                if (player.tokens.some(t => GameLogic.isValidMove(t, val, player, match))) hasValidMoves = true;
-            });
+            // Append to accumulated dice values (don't replace)
+            match.currentTurn.diceValues = [
+                ...(match.currentTurn.diceValues || []),
+                ...latestRoll
+            ];
+            match.currentTurn.turnDeadline = new Date(Date.now() + 15000);
 
             const roomName = `game:${matchId}`;
             if (!socket.rooms.has(roomName)) socket.join(roomName);
 
+            // Check double-6
+            const isDoubleSix = latestRoll[0] === 6 && latestRoll[1] === 6;
+
+            if (isDoubleSix) {
+                match.currentTurn.rollCount++;
+
+                if (match.currentTurn.rollCount >= 3) {
+                    // 3x double-6 forfeit
+                    await match.save();
+                    io.to(roomName).emit("game:diceRolled", {
+                        userId: socket.user._id,
+                        diceValues: match.currentTurn.diceValues,
+                        latestRoll,
+                        hasValidMoves: false,
+                        canRollAgain: false
+                    });
+                    const nextTurn = await GameLogic.switchTurn(match);
+                    io.to(roomName).emit("game:turnChanged", nextTurn);
+                    return;
+                }
+
+                // Stay in rolling phase — player rolls again
+                await match.save();
+                io.to(roomName).emit("game:diceRolled", {
+                    userId: socket.user._id,
+                    diceValues: match.currentTurn.diceValues,
+                    latestRoll,
+                    hasValidMoves: true,
+                    canRollAgain: true
+                });
+                return;
+            }
+
+            // Not double-6 — end rolling phase, enter move phase
+            match.currentTurn.rollingPhase = false;
+
+            // Check valid moves across UNUSED accumulated dice only
+            const player = match.players.find(
+                p => p.userId.toString() === socket.user._id.toString()
+            );
+            const unusedIndices = match.currentTurn.diceValues
+                .map((_, i) => i)
+                .filter(i => !match.currentTurn.usedDiceIndices.includes(i));
+
+            let hasValidMoves = false;
+            unusedIndices.forEach(idx => {
+                const val = match.currentTurn.diceValues[idx];
+                if (player.tokens.some(t => GameLogic.isValidMove(t, val, player, match)))
+                    hasValidMoves = true;
+            });
+
             if (!hasValidMoves) {
                 await match.save();
-                io.to(roomName).emit("game:diceRolled", { userId: socket.user._id, diceValues, hasValidMoves: false });
+                io.to(roomName).emit("game:diceRolled", {
+                    userId: socket.user._id,
+                    diceValues: match.currentTurn.diceValues,
+                    latestRoll,
+                    hasValidMoves: false,
+                    canRollAgain: false
+                });
 
                 const allTokensHome = player.tokens.every(t => t.position === -1);
-                const delay = allTokensHome ? 2000 : 3000; // Faster turn switch
+                const delay = allTokensHome ? 2000 : 3000;
 
                 setTimeout(async () => {
-                    // Lock again for switch?
-                    // Async flow... tricky inside timeout. 
-                    // Best effort:
                     const switchLock = getMatchLock(matchId);
                     const switchRelease = await switchLock.acquire();
                     try {
                         const currentMatch = await Match.findById(matchId);
                         if (!currentMatch || currentMatch.state !== "RUNNING") return;
-                        if (currentMatch.currentTurn.userId.toString() === socket.user._id.toString()) {
+                        if (currentMatch.currentTurn.userId.toString() ===
+                            socket.user._id.toString()) {
                             const nextTurn = await GameLogic.switchTurn(currentMatch);
                             io.to(roomName).emit("game:turnChanged", nextTurn);
                         }
@@ -258,7 +306,13 @@ module.exports = (io, socket) => {
             }
 
             await match.save();
-            io.to(roomName).emit("game:diceRolled", { userId: socket.user._id, diceValues, hasValidMoves: true });
+            io.to(roomName).emit("game:diceRolled", {
+                userId: socket.user._id,
+                diceValues: match.currentTurn.diceValues,
+                latestRoll,
+                hasValidMoves: true,
+                canRollAgain: false
+            });
 
         } catch (err) {
             logger.error(err);
@@ -281,6 +335,11 @@ module.exports = (io, socket) => {
 
             if (match.currentTurn.userId.toString() !== socket.user._id.toString()) {
                 return socket.emit("error", { message: "Not your turn" });
+            }
+
+            // Guard: must be in move phase (not rolling phase)
+            if (match.currentTurn.rollingPhase) {
+                return socket.emit("error", { message: "Roll dice first" });
             }
 
             // Apply Move
@@ -316,11 +375,26 @@ module.exports = (io, socket) => {
                 return;
             }
 
-            // --- Determine if all dice have been consumed ---
+            // --- Check bonus IMMEDIATELY after each move ---
+            if (result.bonusTurn) {
+                // Capture or finish happened — STOP moving, back to rolling phase
+                // Preserve diceValues & usedDiceIndices (unused dice remain)
+                match.currentTurn.rollingPhase = true;
+                match.currentTurn.pendingBonus = false;
+                match.currentTurn.turnDeadline = new Date(Date.now() + 15000);
+                await match.save();
+
+                io.to(roomName).emit("game:turnContinued", {
+                    userId: socket.user._id,
+                    message: "Bonus Turn! Roll again."
+                });
+                return;
+            }
+
+            // --- No bonus: check if all dice consumed ---
             const allDiceUsed = result.allDiceUsed;
 
             if (!allDiceUsed) {
-                // Check if remaining unused dice have any valid moves
                 const unusedIndices = match.currentTurn.diceValues
                     .map((_, i) => i)
                     .filter(i => !match.currentTurn.usedDiceIndices.includes(i));
@@ -336,7 +410,6 @@ module.exports = (io, socket) => {
                 });
 
                 if (remainingHasMoves) {
-                    // Still have usable dice — tell client to continue moving
                     match.currentTurn.turnDeadline = new Date(Date.now() + 15000);
                     await match.save();
                     io.to(roomName).emit("game:turnContinued", {
@@ -345,37 +418,12 @@ module.exports = (io, socket) => {
                     });
                     return;
                 }
-                // Remaining dice have no valid moves — fall through to evaluate turn end
+                // Remaining dice unusable — fall through
             }
 
-            // --- All dice consumed (or remaining unusable): evaluate bonus / turn change ---
-            const isDoubleSix = match.currentTurn.diceValues[0] === 6
-                && match.currentTurn.diceValues[1] === 6;
-
-            if (result.pendingBonus || isDoubleSix) {
-                match.currentTurn.rollCount++;
-
-                if (match.currentTurn.rollCount >= 3) {
-                    const nextTurn = await GameLogic.switchTurn(match);
-                    io.to(roomName).emit("game:turnChanged", nextTurn);
-                    return;
-                }
-
-                // Reset dice for bonus roll
-                match.currentTurn.diceValues = [];
-                match.currentTurn.usedDiceIndices = [];
-                match.currentTurn.pendingBonus = false;
-                match.currentTurn.turnDeadline = new Date(Date.now() + 15000);
-                await match.save();
-
-                io.to(roomName).emit("game:turnContinued", {
-                    userId: socket.user._id,
-                    message: "Bonus Turn! Roll again."
-                });
-            } else {
-                const nextTurn = await GameLogic.switchTurn(match);
-                io.to(roomName).emit("game:turnChanged", nextTurn);
-            }
+            // All consumed or unusable → switch turn
+            const nextTurn = await GameLogic.switchTurn(match);
+            io.to(roomName).emit("game:turnChanged", nextTurn);
 
         } catch (err) {
             logger.error(err);

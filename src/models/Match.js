@@ -37,6 +37,7 @@ const MatchSchema = new Schema(
       usedDiceIndices: [{ type: Number }], // Array of indices of used dice e.g. [0]
       rollCount: { type: Number, default: 0 }, // Track rolls if implementing 3x 6s rule
       pendingBonus: { type: Boolean, default: false }, // Track if a bonus (capture/finish) was triggered
+      rollingPhase: { type: Boolean, default: true }, // true = must roll, false = must move
       turnDeadline: { type: Date } // Rule-11 & 17: Turn Timer persistence
     },
 

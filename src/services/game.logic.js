@@ -274,6 +274,7 @@ class GameLogic {
                 usedDiceIndices: [],
                 rollCount: 0,
                 pendingBonus: false,
+                rollingPhase: true,
                 turnDeadline: new Date(Date.now() + 15000) // 15s Timer
             };
             await match.save();
