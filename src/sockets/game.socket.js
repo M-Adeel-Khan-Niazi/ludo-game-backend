@@ -316,57 +316,65 @@ module.exports = (io, socket) => {
                 return;
             }
 
-            // Fix 9: Stack limit?
-            // Fix 6: Bonus only if used 6
-            const usedDiceValue = match.currentTurn.diceValues[diceIndex];
-            const rolledSix = usedDiceValue === 6;
+            // --- Determine if all dice have been consumed ---
+            const allDiceUsed = result.allDiceUsed;
 
-            if (result.bonusTurn || rolledSix) {
-                // Bonus Logic
+            if (!allDiceUsed) {
+                // Check if remaining unused dice have any valid moves
+                const unusedIndices = match.currentTurn.diceValues
+                    .map((_, i) => i)
+                    .filter(i => !match.currentTurn.usedDiceIndices.includes(i));
+
+                const player = match.players.find(
+                    p => p.userId.toString() === socket.user._id.toString()
+                );
+                const remainingHasMoves = unusedIndices.some(idx => {
+                    const val = match.currentTurn.diceValues[idx];
+                    return player.tokens.some(t =>
+                        GameLogic.isValidMove(t, val, player, match)
+                    );
+                });
+
+                if (remainingHasMoves) {
+                    // Still have usable dice — tell client to continue moving
+                    match.currentTurn.turnDeadline = new Date(Date.now() + 15000);
+                    await match.save();
+                    io.to(roomName).emit("game:turnContinued", {
+                        userId: socket.user._id,
+                        message: "Please use remaining dice"
+                    });
+                    return;
+                }
+                // Remaining dice have no valid moves — fall through to evaluate turn end
+            }
+
+            // --- All dice consumed (or remaining unusable): evaluate bonus / turn change ---
+            const isDoubleSix = match.currentTurn.diceValues[0] === 6
+                && match.currentTurn.diceValues[1] === 6;
+
+            if (result.pendingBonus || isDoubleSix) {
                 match.currentTurn.rollCount++;
 
                 if (match.currentTurn.rollCount >= 3) {
-                    // Too many 6s (or bonuses), forfeit turn? 
-                    // Usually only consecutive 6s count. Capture bonus is separate?
-                    // Ludo Star: 3 consecutive 6s = forfeit. Capture/Home gives extra turn but doesn't count towards "3x6" penalty?
-                    // Let's implement simplistic: 3 consecutive bonus actions = forfeit.
                     const nextTurn = await GameLogic.switchTurn(match);
                     io.to(roomName).emit("game:turnChanged", nextTurn);
                     return;
                 }
 
-                // Reset Dice for new roll
+                // Reset dice for bonus roll
                 match.currentTurn.diceValues = [];
                 match.currentTurn.usedDiceIndices = [];
-                // Reset timer for bonus roll
+                match.currentTurn.pendingBonus = false;
                 match.currentTurn.turnDeadline = new Date(Date.now() + 15000);
-
                 await match.save();
-                io.to(roomName).emit("game:turnContinued", { userId: socket.user._id, message: "Bonus Turn! Roll again." });
+
+                io.to(roomName).emit("game:turnContinued", {
+                    userId: socket.user._id,
+                    message: "Bonus Turn! Roll again."
+                });
             } else {
-                // Check if unused dice exist
-                const unusedIndices = match.currentTurn.diceValues.map((_, i) => i)
-                    .filter(i => !match.currentTurn.usedDiceIndices.includes(i));
-
-                let remainingHasMoves = false;
-                if (unusedIndices.length > 0) {
-                    const player = match.players.find(p => p.userId.toString() === socket.user._id.toString());
-                    remainingHasMoves = unusedIndices.some(idx => {
-                        const val = match.currentTurn.diceValues[idx];
-                        return player.tokens.some(t => GameLogic.isValidMove(t, val, player, match));
-                    });
-                }
-
-                if (remainingHasMoves) {
-                    io.to(roomName).emit("game:turnContinued", {
-                        userId: socket.user._id,
-                        message: "Please use remaining dice"
-                    });
-                } else {
-                    // Switch
-                    const nextTurn = await GameLogic.switchTurn(match);
-                    io.to(roomName).emit("game:turnChanged", nextTurn);
-                }
+                const nextTurn = await GameLogic.switchTurn(match);
+                io.to(roomName).emit("game:turnChanged", nextTurn);
             }
 
         } catch (err) {
