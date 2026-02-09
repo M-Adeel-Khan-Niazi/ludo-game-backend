@@ -20,6 +20,9 @@ app.use(passport.initialize());
 app.use(requestLogger);
 
 // routes
+app.get("/", (req, res) => {
+    res.send("Ludo Game Backend is running!");
+});
 app.use("/api/v1", routes);
 
 // error handler
