@@ -1,12 +1,9 @@
 const Match = require("../models/Match");
-const GameLogic = require("../services/game.logic");
+const { GameLogic } = require("../services/game.logic");
 const logger = require("../config/logger");
 const MatchService = require("../services/match.service");
 const { getMatchLock } = require("../utils/lock");
-const mongoose = require("mongoose");
-
-// Global disconnect timeouts map
-const disconnectTimeouts = new Map();
+const { startTimer, clearTimer } = require("../services/timer.service");
 
 module.exports = (io, socket) => {
 
@@ -24,12 +21,6 @@ module.exports = (io, socket) => {
 
             const player = match.players.find(p => p.userId._id.toString() === socket.user._id.toString());
             if (!player) return socket.emit("error", { message: "You are not in this match" });
-
-            // Clear disconnect timeout if exists
-            if (disconnectTimeouts.has(socket.user._id.toString())) {
-                clearTimeout(disconnectTimeouts.get(socket.user._id.toString()));
-                disconnectTimeouts.delete(socket.user._id.toString());
-            }
 
             // Note: need to save state
             player.status = "ACTIVE";
@@ -51,6 +42,9 @@ module.exports = (io, socket) => {
             // Rule 7: Notify when complete/ready. If running, broadcast state to ensure everyone has up-to-date Turn info.
             if (match.state === "RUNNING") {
                 io.to(roomName).emit("game:state", match);
+                if (match.currentTurn && match.currentTurn.userId) {
+                    startTimer(io, matchId, match.currentTurn.turn);
+                }
             }
 
             logger.info(`User ${socket.user._id} joined game ${matchId}`);
@@ -103,8 +97,7 @@ module.exports = (io, socket) => {
                 // If it was their turn, switch turn
                 const match = result.match;
                 if (match && match.currentTurn.userId.toString() === socket.user._id.toString()) {
-                    const nextTurn = await GameLogic.switchTurn(match);
-                    io.to(`game:${matchId}`).emit("game:turnChanged", nextTurn);
+                    await GameLogic.switchTurn(io, match, logger);
                 }
             }
 
@@ -194,9 +187,6 @@ module.exports = (io, socket) => {
 
     // Roll Dice
     socket.on("game:rollDice", async ({ matchId }) => {
-        if (!mongoose.Types.ObjectId.isValid(matchId))
-            return socket.emit("error", { message: "Invalid ID" });
-
         const lock = getMatchLock(matchId);
         const release = await lock.acquire();
 
@@ -209,13 +199,13 @@ module.exports = (io, socket) => {
             if (match.currentTurn.userId.toString() !== socket.user._id.toString())
                 return socket.emit("error", { message: "Not your turn" });
 
-            // Guard: must be in rolling phase
             if (!match.currentTurn.rollingPhase)
                 return socket.emit("error", { message: "Dice already rolled, please move" });
 
+            clearTimer(matchId, match.currentTurn.turn);
+
             const latestRoll = GameLogic.rollDice();
 
-            // Append to accumulated dice values (don't replace)
             match.currentTurn.diceValues = [
                 ...(match.currentTurn.diceValues || []),
                 ...latestRoll
@@ -225,14 +215,12 @@ module.exports = (io, socket) => {
             const roomName = `game:${matchId}`;
             if (!socket.rooms.has(roomName)) socket.join(roomName);
 
-            // Check double-6
             const isDoubleSix = latestRoll[0] === 6 && latestRoll[1] === 6;
 
             if (isDoubleSix) {
                 match.currentTurn.rollCount++;
 
                 if (match.currentTurn.rollCount >= 3) {
-                    // 3x double-6 forfeit
                     await match.save();
                     io.to(roomName).emit("game:diceRolled", {
                         userId: socket.user._id,
@@ -241,12 +229,10 @@ module.exports = (io, socket) => {
                         hasValidMoves: false,
                         canRollAgain: false
                     });
-                    const nextTurn = await GameLogic.switchTurn(match);
-                    io.to(roomName).emit("game:turnChanged", nextTurn);
+                    await GameLogic.switchTurn(io, match, logger);
                     return;
                 }
 
-                // Stay in rolling phase — player rolls again
                 await match.save();
                 io.to(roomName).emit("game:diceRolled", {
                     userId: socket.user._id,
@@ -255,13 +241,12 @@ module.exports = (io, socket) => {
                     hasValidMoves: true,
                     canRollAgain: true
                 });
+                startTimer(io, matchId, match.currentTurn.turn);
                 return;
             }
 
-            // Not double-6 — end rolling phase, enter move phase
             match.currentTurn.rollingPhase = false;
 
-            // Check valid moves across UNUSED accumulated dice only
             const player = match.players.find(
                 p => p.userId.toString() === socket.user._id.toString()
             );
@@ -286,22 +271,7 @@ module.exports = (io, socket) => {
                     canRollAgain: false
                 });
 
-                const allTokensHome = player.tokens.every(t => t.position === -1);
-                const delay = allTokensHome ? 2000 : 3000;
-
-                setTimeout(async () => {
-                    const switchLock = getMatchLock(matchId);
-                    const switchRelease = await switchLock.acquire();
-                    try {
-                        const currentMatch = await Match.findById(matchId);
-                        if (!currentMatch || currentMatch.state !== "RUNNING") return;
-                        if (currentMatch.currentTurn.userId.toString() ===
-                            socket.user._id.toString()) {
-                            const nextTurn = await GameLogic.switchTurn(currentMatch);
-                            io.to(roomName).emit("game:turnChanged", nextTurn);
-                        }
-                    } finally { switchRelease(); }
-                }, delay);
+                await GameLogic.switchTurn(io, match, logger);
                 return;
             }
 
@@ -313,6 +283,7 @@ module.exports = (io, socket) => {
                 hasValidMoves: true,
                 canRollAgain: false
             });
+            startTimer(io, matchId, match.currentTurn.turn);
 
         } catch (err) {
             logger.error(err);
@@ -324,8 +295,6 @@ module.exports = (io, socket) => {
 
     // Move Token
     socket.on("game:moveToken", async ({ matchId, tokenId, diceIndex }) => {
-        if (!mongoose.Types.ObjectId.isValid(matchId)) return socket.emit("error", { message: "Invalid ID" });
-
         const lock = getMatchLock(matchId);
         const release = await lock.acquire();
 
@@ -337,12 +306,12 @@ module.exports = (io, socket) => {
                 return socket.emit("error", { message: "Not your turn" });
             }
 
-            // Guard: must be in move phase (not rolling phase)
             if (match.currentTurn.rollingPhase) {
                 return socket.emit("error", { message: "Roll dice first" });
             }
 
-            // Apply Move
+            clearTimer(matchId, match.currentTurn.turn);
+
             const result = await GameLogic.applyMove(match, socket.user._id, tokenId, diceIndex);
 
             const roomName = `game:${matchId}`;
@@ -356,7 +325,6 @@ module.exports = (io, socket) => {
                 });
             }
 
-            // Emit Update
             io.to(roomName).emit("game:tokenMoved", {
                 userId: socket.user._id,
                 tokenId,
@@ -368,17 +336,13 @@ module.exports = (io, socket) => {
                 finished: result.finished
             });
 
-            // Check Win
             if (result.winnerId) {
                 const { prize } = await MatchService.settleGame(match, result.winnerId);
                 io.to(roomName).emit("game:gameOver", { winnerId: result.winnerId, prize, reason: "NATURAL_WIN" });
                 return;
             }
 
-            // --- Check bonus IMMEDIATELY after each move ---
             if (result.bonusTurn) {
-                // Capture or finish happened — STOP moving, back to rolling phase
-                // Preserve diceValues & usedDiceIndices (unused dice remain)
                 match.currentTurn.rollingPhase = true;
                 match.currentTurn.pendingBonus = false;
                 match.currentTurn.turnDeadline = new Date(Date.now() + 15000);
@@ -388,10 +352,10 @@ module.exports = (io, socket) => {
                     userId: socket.user._id,
                     message: "Bonus Turn! Roll again."
                 });
+                startTimer(io, matchId, match.currentTurn.turn);
                 return;
             }
 
-            // --- No bonus: check if all dice consumed ---
             const allDiceUsed = result.allDiceUsed;
 
             if (!allDiceUsed) {
@@ -416,14 +380,12 @@ module.exports = (io, socket) => {
                         userId: socket.user._id,
                         message: "Please use remaining dice"
                     });
+                    startTimer(io, matchId, match.currentTurn.turn);
                     return;
                 }
-                // Remaining dice unusable — fall through
             }
 
-            // All consumed or unusable → switch turn
-            const nextTurn = await GameLogic.switchTurn(match);
-            io.to(roomName).emit("game:turnChanged", nextTurn);
+            await GameLogic.switchTurn(io, match, logger);
 
         } catch (err) {
             logger.error(err);
@@ -445,9 +407,6 @@ module.exports = (io, socket) => {
             });
 
             for (const match of matches) {
-                // Fix 10: Unique timeout key
-                const timeoutKey = `${userId}_${match._id}`;
-
                 const lock = getMatchLock(match._id.toString());
                 const release = await lock.acquire();
 
@@ -460,53 +419,10 @@ module.exports = (io, socket) => {
 
                         io.to(`game:${match._id}`).emit("game:playerDisconnected", { userId, message: "Player disconnected. 2 minutes to rejoin." });
 
-                        const timeoutId = setTimeout(async () => {
-                            const toLock = getMatchLock(match._id.toString());
-                            const toRelease = await toLock.acquire();
-                            try {
-                                const currentMatch = await Match.findById(match._id);
-                                if (!currentMatch || currentMatch.state !== "RUNNING") return;
-
-                                const p = currentMatch.players.find(p => p.userId.toString() === userId);
-                                // Check if still disconnected
-                                if (p && p.status === "DISCONNECTED") {
-                                    p.status = "DISQUALIFIED";
-                                    p.tokens.forEach(t => t.position = -1);
-
-                                    await currentMatch.save();
-                                    io.to(`game:${match._id}`).emit("game:playerDisqualified", { userId, message: "Player disqualified due to timeout." });
-
-                                    // Check Last Man Standing
-                                    const remaining = currentMatch.players.filter(pp => !["LEFT", "DISQUALIFIED", "DISCONNECTED"].includes(pp.status));
-                                    // Note: DISCONNECTED players are still theoretically in game until timeout.
-                                    // If we have 1 ACTIVE and 1 DISCONNECTED... we wait.
-                                    // If we disqualify this one, and only 1 ACTIVE remains? All others are LEFT/DISQ.
-
-                                    // But wait, what if 2 ACTIVE? OK.
-
-                                    const functionalPlayers = currentMatch.players.filter(pp => !["LEFT", "DISQUALIFIED"].includes(pp.status));
-                                    // If functional == 1 (The winner).
-                                    // Wait, if Disconnected players exist, they are "functional" but offline.
-                                    // If I disqualify P1. P2 is Active. P3 is Disconnected (timeout pending).
-                                    // functional = [P2, P3]. Length 2. Game continues. Correct.
-
-                                    if (functionalPlayers.length === 1 && currentMatch.players.length > 1) {
-                                        const winnerId = functionalPlayers[0].userId;
-                                        const { prize } = await MatchService.settleGame(currentMatch, winnerId);
-                                        io.to(`game:${match._id}`).emit("game:gameOver", { winnerId, prize, reason: "Last Man Standing" });
-                                        return;
-                                    }
-
-                                    if (currentMatch.currentTurn.userId.toString() === userId) {
-                                        const nextTurn = await GameLogic.switchTurn(currentMatch);
-                                        io.to(`game:${match._id}`).emit("game:turnChanged", nextTurn);
-                                    }
-                                }
-                            } catch (e) { logger.error("Timeout Error", e); }
-                            finally { toRelease(); }
-                        }, 2 * 60 * 1000);
-
-                        disconnectTimeouts.set(timeoutKey, timeoutId);
+                        if (match.currentTurn.userId.toString() === userId) {
+                            clearTimer(match._id, match.currentTurn.turn);
+                            await GameLogic.switchTurn(io, match, logger);
+                        }
                     }
                 } finally { release(); }
             }

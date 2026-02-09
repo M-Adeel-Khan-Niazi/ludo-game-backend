@@ -26,22 +26,13 @@ cron.schedule("*/5 * * * * *", async () => {
                 if (FRESH_MATCH.currentTurn.turnDeadline && new Date(FRESH_MATCH.currentTurn.turnDeadline) < new Date()) {
                     logger.info(`Turn expired for match ${match._id}, switching turn.`);
 
-                    // Switch Turn
-                    const nextTurn = await GameLogic.switchTurn(FRESH_MATCH);
-
-                    // We need 'io' to emit... 
-                    // This cron service doesn't have access to 'io' easily unless exported or global.
-                    // 'server.js' or 'app.js' usually has 'io'.
-                    // We can import 'socket.io' instance if it's singleton?
-                    // Or we just update DB, and client polls? Client relies on socket.
-                    // If we don't emit, clients won't know until they try to move (?)
-
-                    // Ideally, we need 'io'.
-                    // In `src/sockets/index.js` or similar, 'io' is initialized.
-                    // We can assign `global.io = io` in server.js?
+                    // Switch Turn, passing global io instance
                     if (global.io) {
-                        global.io.to(`game:${match._id}`).emit("game:turnChanged", nextTurn);
-                        global.io.to(`game:${match._id}`).emit("game:turnExpired", { message: "Turn time expired!" });
+                        await GameLogic.switchTurn(global.io, FRESH_MATCH, logger);
+                    } else {
+                        logger.warn(`Cron: global.io not found, cannot emit socket event for match ${match._id}`);
+                        // Fallback to old logic maybe? Or just log. For now, just log.
+                        // The timer service should handle this anyway. This cron is a fallback.
                     }
                 }
             } catch (e) {

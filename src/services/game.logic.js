@@ -1,5 +1,3 @@
-const Match = require("../models/Match");
-
 class GameLogic {
     constructor() {
         // Game Constants
@@ -263,10 +261,11 @@ class GameLogic {
             winnerId
         };
     }
-
-    async switchTurn(match) {
+    
+    async switchTurn(io, match, logger) {
         const nextPlayer = this.getNextTurnColor(match);
         if (nextPlayer) {
+            const currentTurnNumber = match.currentTurn ? match.currentTurn.turn : 0;
             match.currentTurn = {
                 userId: nextPlayer.userId,
                 color: nextPlayer.color,
@@ -275,9 +274,17 @@ class GameLogic {
                 rollCount: 0,
                 pendingBonus: false,
                 rollingPhase: true,
+                turn: (currentTurnNumber || 0) + 1, // Increment turn number
                 turnDeadline: new Date(Date.now() + 15000) // 15s Timer
             };
             await match.save();
+
+            const roomName = `game:${match._id}`;
+            io.to(roomName).emit("game:turnChanged", match.currentTurn);
+
+            // Start timer for the next turn
+            const { startTimer } = require('../services/timer.service');
+            startTimer(io, match._id, match.currentTurn.turn);
         }
         return match.currentTurn;
     }
@@ -305,5 +312,6 @@ class GameLogic {
         return null;
     }
 }
-
-module.exports = new GameLogic();
+module.exports = {
+    GameLogic: new GameLogic(),
+};
