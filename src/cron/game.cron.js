@@ -1,6 +1,6 @@
 const cron = require("node-cron");
 const Match = require("../models/Match");
-const GameLogic = require("../services/game.logic");
+const { GameLogic } = require("../services/game.logic");
 const logger = require("../config/logger");
 const { getMatchLock } = require("../utils/lock");
 

@@ -177,7 +177,7 @@ class GameLogic {
         }
 
         // Execute Move
-        let captured = false;
+        let captured = null;
         let finished = false;
         let bonusTurn = false;
 
@@ -226,8 +226,9 @@ class GameLogic {
                                 // Double -> Safe. No capture.
                             } else {
                                 // Capture Single
-                                enemyTokensAtPos.forEach(ot => ot.position = -1);
-                                captured = true;
+                                const capturedToken = enemyTokensAtPos[0];
+                                capturedToken.position = -1;
+                                captured = { tokenId: capturedToken.tokenId, color: otherPlayer.color };
                                 bonusTurn = true;
                                 player.hasCaptured = true;
                             }
