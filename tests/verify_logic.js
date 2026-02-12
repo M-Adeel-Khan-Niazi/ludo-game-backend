@@ -1,5 +1,5 @@
 const Match = require('../src/models/Match');
-const GameLogic = require('../src/services/game.logic');
+const { GameLogic } = require('../src/services/game.logic');
 const mongoose = require('mongoose');
 
 // Mock Data

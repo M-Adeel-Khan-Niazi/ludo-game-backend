@@ -1,5 +1,3 @@
-const Match = require("../models/Match");
-
 class GameLogic {
     constructor() {
         // Game Constants
@@ -31,7 +29,7 @@ class GameLogic {
     getNextTurnColor(currentMatch) {
         const colors = ['red', 'green', 'yellow', 'blue'];
         const activePlayers = currentMatch.players
-            .filter(p => p.status === 'ACTIVE')
+            .filter(p => p.status === 'ACTIVE' || p.status === 'DISCONNECTED')
             .sort((a, b) => colors.indexOf(a.color) - colors.indexOf(b.color));
 
         if (activePlayers.length === 0) return null;
@@ -179,7 +177,7 @@ class GameLogic {
         }
 
         // Execute Move
-        let captured = false;
+        let captured = null;
         let finished = false;
         let bonusTurn = false;
 
@@ -228,8 +226,9 @@ class GameLogic {
                                 // Double -> Safe. No capture.
                             } else {
                                 // Capture Single
-                                enemyTokensAtPos.forEach(ot => ot.position = -1);
-                                captured = true;
+                                const capturedToken = enemyTokensAtPos[0];
+                                capturedToken.position = -1;
+                                captured = { tokenId: capturedToken.tokenId, color: otherPlayer.color };
                                 bonusTurn = true;
                                 player.hasCaptured = true;
                             }
@@ -245,7 +244,7 @@ class GameLogic {
         }
 
         match.currentTurn.usedDiceIndices.push(diceIndex);
-        await match.save();
+        match.markModified('currentTurn');
 
         const allDiceUsed = match.currentTurn.diceValues.length === match.currentTurn.usedDiceIndices.length;
 
@@ -263,22 +262,38 @@ class GameLogic {
             winnerId
         };
     }
-
-    async switchTurn(match) {
+    
+    async switchTurn(io, match, logger) {
+        const { startTimer, clearTimer } = require('../services/timer.service');
         const nextPlayer = this.getNextTurnColor(match);
-        if (nextPlayer) {
-            match.currentTurn = {
-                userId: nextPlayer.userId,
-                color: nextPlayer.color,
-                diceValues: [],
-                usedDiceIndices: [],
-                rollCount: 0,
-                pendingBonus: false,
-                rollingPhase: true,
-                turnDeadline: new Date(Date.now() + 15000) // 15s Timer
-            };
+
+        if (!nextPlayer) {
+            match.state = 'ABANDONED';
             await match.save();
+            clearTimer(match._id, match.currentTurn.turn); // Clear any lingering timer
+            logger.info(`[GameLogic] Match ${match._id} abandoned. No active players.`);
+            return null;
         }
+
+        const currentTurnNumber = match.currentTurn ? match.currentTurn.turn : 0;
+        match.currentTurn = {
+            userId: nextPlayer.userId,
+            color: nextPlayer.color,
+            diceValues: [],
+            usedDiceIndices: [],
+            rollCount: 0,
+            pendingBonus: false,
+            rollingPhase: true,
+            turn: (currentTurnNumber || 0) + 1,
+            turnDeadline: new Date(Date.now() + 15000)
+        };
+        await match.save();
+
+        const roomName = `game:${match._id}`;
+        io.to(roomName).emit("game:turnChanged", match.currentTurn);
+
+        startTimer(io, match._id, match.currentTurn.turn);
+
         return match.currentTurn;
     }
 
@@ -305,5 +320,6 @@ class GameLogic {
         return null;
     }
 }
-
-module.exports = new GameLogic();
+module.exports = {
+    GameLogic: new GameLogic(),
+};

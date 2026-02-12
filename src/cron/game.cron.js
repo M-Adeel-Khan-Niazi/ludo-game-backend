@@ -1,6 +1,6 @@
 const cron = require("node-cron");
 const Match = require("../models/Match");
-const GameLogic = require("../services/game.logic");
+const { GameLogic } = require("../services/game.logic");
 const logger = require("../config/logger");
 const { getMatchLock } = require("../utils/lock");
 
@@ -8,6 +8,48 @@ const { getMatchLock } = require("../utils/lock");
 cron.schedule("*/5 * * * * *", async () => {
     try {
         const now = new Date();
+
+        // --- Handle Disconnect Timeouts ---
+        const runningMatches = await Match.find({ state: "RUNNING" });
+        for (const match of runningMatches) {
+            const lock = getMatchLock(match._id.toString());
+            const release = await lock.acquire();
+            try {
+                let changed = false;
+                const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
+
+                for (const player of match.players) {
+                    if (player.status === 'DISCONNECTED' && player.disconnectedAt && new Date(player.disconnectedAt) < twoMinutesAgo) {
+                        player.status = 'LEFT';
+                        changed = true;
+                        logger.info(`Player ${player.userId} in match ${match._id} marked as LEFT due to disconnect timeout.`);
+                        // Note: MatchService.leaveMatch handles settling loss. This is a simplified version.
+                    }
+                }
+
+                if (changed) {
+                    const remainingPlayers = match.players.filter(p => p.status !== 'LEFT' && p.status !== 'DISQUALIFIED');
+                    if (remainingPlayers.length === 1) {
+                        const winner = remainingPlayers[0];
+                        logger.info(`Match ${match._id} ending due to disconnect timeouts. Winner: ${winner.userId}`);
+                        const matchService = require('../services/match.service');
+                        await matchService.settleGame(match, winner.userId); // This will save the match
+                    } else if (remainingPlayers.length === 0) {
+                        match.state = 'ABANDONED';
+                        logger.info(`Match ${match._id} abandoned as all players timed out.`);
+                        await match.save();
+                    } else {
+                        await match.save();
+                    }
+                }
+            } catch (e) {
+                logger.error(`Cron Disconnect Timeout Error for match ${match._id}:`, e);
+            } finally {
+                release();
+            }
+        }
+
+
         // Find matches with expired turn deadlines
         const expiredMatches = await Match.find({
             state: "RUNNING",
@@ -26,22 +68,13 @@ cron.schedule("*/5 * * * * *", async () => {
                 if (FRESH_MATCH.currentTurn.turnDeadline && new Date(FRESH_MATCH.currentTurn.turnDeadline) < new Date()) {
                     logger.info(`Turn expired for match ${match._id}, switching turn.`);
 
-                    // Switch Turn
-                    const nextTurn = await GameLogic.switchTurn(FRESH_MATCH);
-
-                    // We need 'io' to emit... 
-                    // This cron service doesn't have access to 'io' easily unless exported or global.
-                    // 'server.js' or 'app.js' usually has 'io'.
-                    // We can import 'socket.io' instance if it's singleton?
-                    // Or we just update DB, and client polls? Client relies on socket.
-                    // If we don't emit, clients won't know until they try to move (?)
-
-                    // Ideally, we need 'io'.
-                    // In `src/sockets/index.js` or similar, 'io' is initialized.
-                    // We can assign `global.io = io` in server.js?
+                    // Switch Turn, passing global io instance
                     if (global.io) {
-                        global.io.to(`game:${match._id}`).emit("game:turnChanged", nextTurn);
-                        global.io.to(`game:${match._id}`).emit("game:turnExpired", { message: "Turn time expired!" });
+                        await GameLogic.switchTurn(global.io, FRESH_MATCH, logger);
+                    } else {
+                        logger.warn(`Cron: global.io not found, cannot emit socket event for match ${match._id}`);
+                        // Fallback to old logic maybe? Or just log. For now, just log.
+                        // The timer service should handle this anyway. This cron is a fallback.
                     }
                 }
             } catch (e) {

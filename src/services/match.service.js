@@ -123,7 +123,8 @@ class MatchService {
                 color: firstPlayer.color,
                 diceValues: [],
                 usedDiceIndices: [],
-                rollCount: 0
+                rollCount: 0,
+                turn: 1 // Initialize turn number
             };
         }
 

@@ -10,7 +10,7 @@ const MatchSchema = new Schema(
     maxPlayers: { type: Number, required: true },
 
     joiningFee: { type: Number, default: 0 },
-    winningMultiplier: { type: Number, default: 1 }, // W
+    winningMultiplier: { type: Number, default: 1 },
 
     players: [{
       color: { type: String, enum: ["red", "green", "yellow", "blue"] },
@@ -27,7 +27,6 @@ const MatchSchema = new Schema(
           isFinished: { type: Boolean, default: false }
         }
       ],
-
     }],
 
     currentTurn: {
@@ -38,7 +37,10 @@ const MatchSchema = new Schema(
       rollCount: { type: Number, default: 0 }, // Track rolls if implementing 3x 6s rule
       pendingBonus: { type: Boolean, default: false }, // Track if a bonus (capture/finish) was triggered
       rollingPhase: { type: Boolean, default: true }, // true = must roll, false = must move
-      turnDeadline: { type: Date } // Rule-11 & 17: Turn Timer persistence
+      turnDeadline: { type: Date }, // Rule-11 & 17: Turn Timer persistence
+      
+      // [FIX] Added this field so Mongoose saves the turn number!
+      turn: { type: Number, default: 1 } 
     },
 
     winner: { type: Schema.Types.ObjectId, ref: "User" },
