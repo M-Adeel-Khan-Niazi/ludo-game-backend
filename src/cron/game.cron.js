@@ -8,6 +8,48 @@ const { getMatchLock } = require("../utils/lock");
 cron.schedule("*/5 * * * * *", async () => {
     try {
         const now = new Date();
+
+        // --- Handle Disconnect Timeouts ---
+        const runningMatches = await Match.find({ state: "RUNNING" });
+        for (const match of runningMatches) {
+            const lock = getMatchLock(match._id.toString());
+            const release = await lock.acquire();
+            try {
+                let changed = false;
+                const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
+
+                for (const player of match.players) {
+                    if (player.status === 'DISCONNECTED' && player.disconnectedAt && new Date(player.disconnectedAt) < twoMinutesAgo) {
+                        player.status = 'LEFT';
+                        changed = true;
+                        logger.info(`Player ${player.userId} in match ${match._id} marked as LEFT due to disconnect timeout.`);
+                        // Note: MatchService.leaveMatch handles settling loss. This is a simplified version.
+                    }
+                }
+
+                if (changed) {
+                    const remainingPlayers = match.players.filter(p => p.status !== 'LEFT' && p.status !== 'DISQUALIFIED');
+                    if (remainingPlayers.length === 1) {
+                        const winner = remainingPlayers[0];
+                        logger.info(`Match ${match._id} ending due to disconnect timeouts. Winner: ${winner.userId}`);
+                        const matchService = require('../services/match.service');
+                        await matchService.settleGame(match, winner.userId); // This will save the match
+                    } else if (remainingPlayers.length === 0) {
+                        match.state = 'ABANDONED';
+                        logger.info(`Match ${match._id} abandoned as all players timed out.`);
+                        await match.save();
+                    } else {
+                        await match.save();
+                    }
+                }
+            } catch (e) {
+                logger.error(`Cron Disconnect Timeout Error for match ${match._id}:`, e);
+            } finally {
+                release();
+            }
+        }
+
+
         // Find matches with expired turn deadlines
         const expiredMatches = await Match.find({
             state: "RUNNING",

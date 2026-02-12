@@ -206,10 +206,14 @@ module.exports = (io, socket) => {
 
             const latestRoll = GameLogic.rollDice();
 
+            const unusedDice = (match.currentTurn.diceValues || [])
+                .filter((_, index) => !match.currentTurn.usedDiceIndices.includes(index));
+
             match.currentTurn.diceValues = [
-                ...(match.currentTurn.diceValues || []),
+                ...unusedDice,
                 ...latestRoll
             ];
+            match.currentTurn.usedDiceIndices = [];
             match.currentTurn.turnDeadline = new Date(Date.now() + 15000);
 
             const roomName = `game:${matchId}`;
@@ -348,9 +352,25 @@ module.exports = (io, socket) => {
                 match.currentTurn.turnDeadline = new Date(Date.now() + 15000);
                 await match.save();
 
+                const isCapture = !!result.captured;
+                const isFinished = !!result.finished;
+
+                let message = "Bonus turn! Roll again...";
+                let reason = 'bonus';
+
+                if (isCapture) {
+                    message = "Token Captured! Bonus turn! Roll again...";
+                    reason = 'capture';
+                } else if (isFinished) {
+                    message = "Token reached home! Bonus turn! Roll again...";
+                    reason = 'home';
+                }
+
                 io.to(roomName).emit("game:turnContinued", {
                     userId: socket.user._id,
-                    message: "Bonus Turn! Roll again."
+                    message: message,
+                    extraTurn: true,
+                    reason: reason
                 });
                 startTimer(io, matchId, match.currentTurn.turn);
                 return;
@@ -378,7 +398,9 @@ module.exports = (io, socket) => {
                     await match.save();
                     io.to(roomName).emit("game:turnContinued", {
                         userId: socket.user._id,
-                        message: "Please use remaining dice"
+                        message: "Please use remaining dice",
+                        extraTurn: false,
+                        reason: 'continue_move'
                     });
                     startTimer(io, matchId, match.currentTurn.turn);
                     return;
