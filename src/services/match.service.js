@@ -289,6 +289,54 @@ class MatchService {
         match.state = "COMPLETED";
 
         await match.save();
+
+        // If this is a tournament match, notify tournament service
+        if (match.tournamentId) {
+            try {
+                const TournamentService = require("./tournament.service");
+                const tournamentResult = await TournamentService.onMatchComplete(match._id, winnerId);
+
+                if (tournamentResult && global.io) {
+                    const Tournament = require("../models/Tournament");
+                    const tournament = await Tournament.findById(match.tournamentId);
+                    if (!tournament) return { prize, adminDiff };
+
+                    const tournamentRoom = `tournament:${tournament._id}`;
+
+                    if (tournamentResult.finalStarted) {
+                        // Notify semi-final winners about the final
+                        const semiFinalRound = tournament.rounds.find(r => r.roundNumber === 1);
+                        const finalRound = tournament.rounds.find(r => r.roundNumber === 2);
+                        if (semiFinalRound && finalRound) {
+                            const finalists = semiFinalRound.matches.map(m => m.winner);
+                            finalists.forEach(userId => {
+                                global.io.to(`user:${userId}`).emit("tournament:finalStarting", {
+                                    tournamentId: tournament._id,
+                                    matchId: finalRound.matches[0].matchId,
+                                    message: "You qualified for the final!"
+                                });
+                            });
+                        }
+                    }
+
+                    if (tournamentResult.tournamentComplete) {
+                        // Notify all tournament players
+                        tournament.players.forEach(p => {
+                            global.io.to(`user:${p.userId}`).emit("tournament:completed", {
+                                tournamentId: tournament._id,
+                                winnerId,
+                                prize: tournament.prizePool,
+                                name: tournament.name
+                            });
+                        });
+                    }
+                }
+            } catch (err) {
+                const logger = require("../config/logger");
+                logger.error("Tournament hook error in settleGame:", err);
+            }
+        }
+
         return { prize, adminDiff };
     }
 }

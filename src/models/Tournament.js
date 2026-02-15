@@ -1,33 +1,39 @@
 const { Schema, model } = require("mongoose");
 
-const tournamentSchema = new Schema(
+const TournamentSchema = new Schema(
   {
-    category: {
-      type: String,
-      enum: ["BRONZE", "SILVER", "GOLD", "PLATINUM"]
-    },
-
-    entryFee: { type: Number, default: 0 },
-    multiplier: { type: Number, default: 1 }, // T = 5
-    playersRequired: { type: Number, default: 16 },
-
-    players: [{ type: Schema.Types.ObjectId, ref: "User" }],
-    rounds: [{
-      gameIds: [{ type: Schema.Types.ObjectId, ref: "Game" }]
-    }],
-
-    winner: { type: Schema.Types.ObjectId, ref: "User" },
-    winningAmount: { type: Number, default: 0 },
+    name: { type: String, required: true, trim: true },
+    entryFee: { type: Number, required: true },
+    prizePool: { type: Number, default: 0 },
+    winningMultiplier: { type: Number, default: 0.85 },
+    maxPlayers: { type: Number, default: 16 },
 
     status: {
       type: String,
-      enum: ["WAITING", "RUNNING", "COMPLETED"]
-    }
+      enum: ["REGISTRATION", "SEMI_FINAL", "FINAL", "COMPLETED", "CANCELLED"],
+      default: "REGISTRATION"
+    },
 
+    players: [{
+      userId: { type: Schema.Types.ObjectId, ref: "User" },
+      registeredAt: { type: Date, default: Date.now }
+    }],
+
+    rounds: [{
+      roundNumber: { type: Number }, // 1 = semi-final, 2 = final
+      matches: [{
+        matchId: { type: Schema.Types.ObjectId, ref: "Match" },
+        tableNumber: { type: Number },
+        winner: { type: Schema.Types.ObjectId, ref: "User", default: null }
+      }]
+    }],
+
+    winner: { type: Schema.Types.ObjectId, ref: "User", default: null },
+    createdBy: { type: Schema.Types.ObjectId, ref: "User", default: null }
   },
   { timestamps: true }
 );
 
-const Tournament = model("Tournament", tournamentSchema);
+const Tournament = model("Tournament", TournamentSchema);
 
 module.exports = Tournament;

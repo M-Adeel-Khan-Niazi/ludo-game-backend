@@ -352,25 +352,18 @@ module.exports = (io, socket) => {
                 match.currentTurn.turnDeadline = new Date(Date.now() + 15000);
                 await match.save();
 
-                const isCapture = !!result.captured;
-                const isFinished = !!result.finished;
-
-                let message = "Bonus turn! Roll again...";
-                let reason = 'bonus';
-
-                if (isCapture) {
-                    message = "Token Captured! Bonus turn! Roll again...";
-                    reason = 'capture';
-                } else if (isFinished) {
-                    message = "Token reached home! Bonus turn! Roll again...";
-                    reason = 'home';
-                }
+                const reason = result.bonusReason || 'bonus';
+                const messages = {
+                    capture: "Token Captured! Bonus turn! Roll again...",
+                    home: "Token reached home! Bonus turn! Roll again...",
+                    bonus: "Bonus turn! Roll again..."
+                };
 
                 io.to(roomName).emit("game:turnContinued", {
                     userId: socket.user._id,
-                    message: message,
+                    message: messages[reason] || messages.bonus,
                     extraTurn: true,
-                    reason: reason
+                    reason
                 });
                 startTimer(io, matchId, match.currentTurn.turn);
                 return;

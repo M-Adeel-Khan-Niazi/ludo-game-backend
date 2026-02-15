@@ -52,7 +52,8 @@ const MatchSchema = new Schema(
       type: String,
       enum: ["WAITING", "RUNNING", "COMPLETED", "CANCELLED"]
     },
-    isPrivate: { type: Boolean, default: false }
+    isPrivate: { type: Boolean, default: false },
+    tournamentId: { type: Schema.Types.ObjectId, ref: "Tournament", default: null }
   },
   { timestamps: true }
 );

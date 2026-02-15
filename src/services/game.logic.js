@@ -180,6 +180,7 @@ class GameLogic {
         let captured = null;
         let finished = false;
         let bonusTurn = false;
+        let bonusReason = null;
 
         if (token.position === this.STATE_HOME) {
             token.position = 0;
@@ -200,6 +201,7 @@ class GameLogic {
             token.isFinished = true;
             finished = true;
             bonusTurn = true;
+            bonusReason = 'home';
         }
 
         // Check Capture
@@ -230,6 +232,7 @@ class GameLogic {
                                 capturedToken.position = -1;
                                 captured = { tokenId: capturedToken.tokenId, color: otherPlayer.color };
                                 bonusTurn = true;
+                                bonusReason = 'capture';
                                 player.hasCaptured = true;
                             }
                         }
@@ -255,9 +258,10 @@ class GameLogic {
             captured,
             finished,
             bonusTurn,
+            bonusReason,
             allDiceUsed,
             match,
-            missedTokenId, // Fixed Name
+            missedTokenId,
             pendingBonus: match.currentTurn.pendingBonus,
             winnerId
         };
