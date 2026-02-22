@@ -11,12 +11,19 @@ class GameLogic {
 
         // Safe Zones (Global Indices on main path)
         this.SAFE_ZONES = [0, 8, 13, 21, 26, 34, 39, 47];
+
+        // Test flag: Ensures the first roll of the server instance is always 6,6
+        // this.isFirstRoll = true;
     }
 
     /**
      * Roll 2 dice
      */
     rollDice() {
+        // if (this.isFirstRoll) {
+        //     this.isFirstRoll = false;
+        //     return [6, 6];
+        // }
         return [
             Math.floor(Math.random() * 6) + 1,
             Math.floor(Math.random() * 6) + 1

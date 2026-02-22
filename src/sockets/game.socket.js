@@ -85,7 +85,7 @@ module.exports = (io, socket) => {
                 io.to(`game:${matchId}`).emit("game:gameOver", {
                     winnerId: result.winnerId,
                     winningAmount: result.winnerAmount,
-                    reason: "Opponent surrendered"
+                    reason: result.reason || "Opponent surrendered"
                 });
                 socket.leave(`game:${matchId}`);
             }
