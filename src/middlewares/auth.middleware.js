@@ -11,4 +11,20 @@ const authenticateJwt = (req, res, next) => {
   })(req, res, next);
 };
 
-module.exports = { authenticateJwt };
+/**
+ * Middleware to restrict access based on roles.
+ * @param  {...String} roles
+ */
+const restrictTo = (...roles) => {
+  return (req, res, next) => {
+    if (!roles.includes(req.user.role)) {
+      return handlers.response.forbidden({
+        res,
+        message: "You do not have permission to perform this action",
+      });
+    }
+    next();
+  };
+};
+
+module.exports = { authenticateJwt, restrictTo };

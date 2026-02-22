@@ -206,6 +206,102 @@ class WalletService {
             }
         };
     }
+
+    /**
+     * Purchase a coin package
+     * @param {String} userId
+     * @param {String} packageId
+     * @param {String} platform
+     * @param {String} provider
+     * @param {Number} amount
+     * @param {String} amountType
+     * @param {String} transactionId
+     */
+    async purchasePackage(userId, packageId, platform, provider, amount, amountType, transactionId) {
+        return this.withTransaction(async (session) => {
+            const CoinPackage = require("../models/CoinPackage");
+            const CoinPurchase = require("../models/CoinPurchase");
+
+            const user = await User.findById(userId).session(session);
+            if (!user) throw new Error("User not found");
+
+            const coinPackage = await CoinPackage.findById(packageId).session(session);
+            if (!coinPackage) throw new Error("Package not found");
+            if (!coinPackage.isActive) throw new Error("Package is not active");
+
+            const totalCoins = coinPackage.coins + coinPackage.bonusCoins;
+
+            // Update user wallet
+            user.wallet.coins += totalCoins;
+            await user.save({ session });
+
+            // Create purchase record
+            const purchase = await CoinPurchase.create(
+                [
+                    {
+                        userId,
+                        packageId,
+                        platform,
+                        coins: coinPackage.coins,
+                        bonusCoins: coinPackage.bonusCoins,
+                        amount,
+                        amountType,
+                        transactionId,
+                        provider,
+                        status: "SUCCESS",
+                    },
+                ],
+                { session }
+            );
+
+            // Create wallet transaction record
+            await WalletTransaction.create(
+                [
+                    {
+                        userId,
+                        type: "COIN_PURCHASE",
+                        amount: totalCoins,
+                        balanceAfter: user.wallet.coins,
+                        description: `Purchased package: ${coinPackage.title}`,
+                    },
+                ],
+                { session }
+            );
+
+            return {
+                wallet: user.wallet,
+                purchase: purchase[0]
+            };
+        });
+    }
+
+    /**
+     * Get purchase history for a user
+     * @param {String} userId
+     * @param {Number} page
+     * @param {Number} limit
+     */
+    async getPurchaseHistory(userId, page = 1, limit = 10) {
+        const CoinPurchase = require("../models/CoinPurchase");
+        const skip = (page - 1) * limit;
+        const purchases = await CoinPurchase.find({ userId })
+            .populate("packageId", "title pricePKR coins bonusCoins")
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit);
+
+        const total = await CoinPurchase.countDocuments({ userId });
+
+        return {
+            purchases,
+            pagination: {
+                page,
+                limit,
+                total,
+                pages: Math.ceil(total / limit)
+            }
+        };
+    }
 }
 
 module.exports = new WalletService();
