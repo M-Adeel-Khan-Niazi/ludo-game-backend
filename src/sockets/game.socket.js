@@ -81,22 +81,24 @@ module.exports = (io, socket) => {
             }
             else if (result.action === "GAME_ENDED") {
                 // 1v1 Opponent Won
-                io.to(`game:${matchId}`).emit("game:playerLeft", { userId: socket.user._id, state: "RUNNING" });
-                io.to(`game:${matchId}`).emit("game:gameOver", {
-                    winnerId: result.winnerId,
-                    winningAmount: result.winnerAmount,
-                    reason: result.reason || "Opponent surrendered"
-                });
+                if (result.match && result.match.currentTurn) {
+                    clearTimer(matchId, result.match.currentTurn.turn);
+                }
+
+                io.to(`game:${matchId}`).emit("game:playerLeft", { userId: socket.user._id, state: "COMPLETED" });
+                const payload = await GameLogic.getGameOverPayload(matchId, result.winnerId, result.reason || "Opponent Left", result.winnerAmount);
+                io.to(`game:${matchId}`).emit("game:gameOver", payload);
                 socket.leave(`game:${matchId}`);
             }
             else if (result.action === "PLAYER_LEFT_GAME") {
                 // 4P etc
-                io.to(`game:${matchId}`).emit("game:playerLeft", { userId: socket.user._id, state: "RUNNING" });
+                io.to(`game:${matchId}`).emit("game:playerLeft", { userId: socket.user._id, state: "RUNNING", status: "LEFT" });
                 socket.leave(`game:${matchId}`);
 
                 // If it was their turn, switch turn
                 const match = result.match;
                 if (match && match.currentTurn.userId.toString() === socket.user._id.toString()) {
+                    clearTimer(matchId, match.currentTurn.turn);
                     await GameLogic.switchTurn(io, match, logger);
                 }
             }
@@ -342,7 +344,8 @@ module.exports = (io, socket) => {
 
             if (result.winnerId) {
                 const { prize } = await MatchService.settleGame(match, result.winnerId);
-                io.to(roomName).emit("game:gameOver", { winnerId: result.winnerId, prize, reason: "NATURAL_WIN" });
+                const payload = await GameLogic.getGameOverPayload(matchId, result.winnerId, "NATURAL_WIN", prize);
+                io.to(roomName).emit("game:gameOver", payload);
                 return;
             }
 

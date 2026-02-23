@@ -43,7 +43,7 @@ class MatchService {
                 userId,
                 color,
                 status: "ACTIVE",
-                team: 1,
+                team: gameType === '2V2' ? 1 : null,
                 isHost: true, // Rule-14: Metadata
                 tokens: [
                     { tokenId: `${color[0].toUpperCase()}1`, position: -1, isFinished: false },
@@ -249,47 +249,70 @@ class MatchService {
     async settleGame(match, winnerId) {
         if (match.state === "COMPLETED") return;
 
-        const winner = match.players.find(p => p.userId.toString() === winnerId.toString());
-        if (!winner) throw new Error("Winner not found in match");
+        const { GameLogic } = require("./game.logic");
 
         // Prize Calculation
         const pool = match.joiningFee * match.players.length;
-        // Note: For 4P it might be different, but assuming winner takes all for simplicty or standard 1v1
-        const prize = Math.floor(pool * match.winningMultiplier);
-        const adminDiff = pool - prize;
+        const netPrize = Math.floor(pool * match.winningMultiplier);
+        const adminDiff = pool - netPrize;
 
-        // Validating losing players (all others)
-        // In 1v1, loser lost fee on entry (locked), so nothing to deduct?
-        // WalletService.joinGame locks the fee (deducts it?). If so, we just add prize to winner.
-        // If joinGame just 'locks' but doesn't deduct, then we need to deduct from losers.
-        // Assuming joinGame DEDUCTS:
-        // We just need to CREDIT the winner.
+        const paidUserIds = new Set();
+        paidUserIds.add(winnerId.toString());
 
-        // Wait, look at leaveMatch logic:
-        // settleLoss(leaver) -> settleWin(winner).
-        // If joinGame deduces, why settleLoss? Maybe 'settleLoss' logs it or finalizes it?
-        // Let's assume we need to call settleWin for winner.
+        // Distribute Winnings
+        if (match.gameType === "4P" || (match.players.length === 4 && match.gameType !== "2V2")) {
+            const rankedPlayers = GameLogic.getRankedPlayers(match, winnerId);
+            const winner = rankedPlayers[0];
+            const runnerUp = rankedPlayers[1];
 
-        await WalletService.settleWin(winnerId, match.joiningFee, prize, match._id);
+            // Split: 75% to 1st, 25% to 2nd
+            const firstPrize = Math.floor(netPrize * 0.75);
+            const secondPrize = netPrize - firstPrize;
 
-        // For others, do we need to call settleLoss?
-        // If they played and lost, maybe yes.
+            // Credit Winner
+            await WalletService.settleWin(winner.userId, match.joiningFee, firstPrize, match._id);
+            
+            // Credit Runner Up (if eligible)
+            if (runnerUp && runnerUp.isEligible) {
+                await WalletService.settleWin(runnerUp.userId, match.joiningFee, secondPrize, match._id);
+                paidUserIds.add(runnerUp.userId.toString());
+            }
+            // If runnerUp is not eligible (e.g. Left), the secondPrize is burned (not distributed)
+
+        } else if (match.gameType === "2V2") {
+            // Find winning team
+            const winnerPlayer = match.players.find(p => p.userId.toString() === winnerId.toString());
+            if (winnerPlayer) {
+                const teamId = winnerPlayer.team;
+                const teamMembers = match.players.filter(p => p.team === teamId);
+                const splitPrize = Math.floor(netPrize / teamMembers.length);
+
+                for (const member of teamMembers) {
+                    await WalletService.settleWin(member.userId, match.joiningFee, splitPrize, match._id);
+                    paidUserIds.add(member.userId.toString());
+                }
+            }
+        } else {
+            // 1v1 or others - Winner Takes All
+            await WalletService.settleWin(winnerId, match.joiningFee, netPrize, match._id);
+        }
+
+        // Handle Losers (Unlock/Burn their locked coins via settleLoss)
         for (const p of match.players) {
-            if (p.userId.toString() !== winnerId.toString()) {
+            if (!paidUserIds.has(p.userId.toString())) {
                 await WalletService.settleLoss(p.userId, match.joiningFee, match._id);
-                // p.status = "LOST"; // Enum doesn't have LOST, keep ACTIVE or update schema
             } else {
                 p.status = "WON";
             }
         }
 
         match.winner = winnerId;
-        match.winningAmount = prize;
+        match.winningAmount = netPrize;
         match.adminProfit = (match.adminProfit || 0) + adminDiff;
         match.state = "COMPLETED";
 
         await match.save();
-        return { prize, adminDiff };
+        return { prize: netPrize, adminDiff };
     }
 }
 
