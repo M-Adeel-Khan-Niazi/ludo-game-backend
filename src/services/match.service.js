@@ -360,7 +360,28 @@ class MatchService {
             }
         }
 
+
         return { prize, netPrize, adminDiff };
+    }
+
+    /**
+     * Get active match for a user
+     */
+    async getActiveMatch(userId) {
+        const match = await Match.findOne({
+            state: { $in: ["WAITING", "RUNNING"] },
+            "players.userId": userId
+        })
+            .populate({
+                path: "players.userId",
+                select: "_id fullName playerStats avatar"
+            })
+            .populate({
+                path: "currentTurn.userId",
+                select: "_id fullName playerStats avatar"
+            });
+
+        return match;
     }
 }
 

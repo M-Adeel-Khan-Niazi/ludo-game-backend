@@ -12,5 +12,8 @@ router.post("/find", authenticateJwt, MatchController.findPubic.bind(MatchContro
 // Join specific match (by RoomCode or ID)
 router.post("/join", authenticateJwt, MatchController.join.bind(MatchController));
 
+// Check if user is in an active game
+router.get("/active", authenticateJwt, MatchController.getActiveMatch.bind(MatchController));
+
 
 module.exports = router;

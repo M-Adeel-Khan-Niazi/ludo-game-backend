@@ -55,6 +55,7 @@ class MatchController {
         }
     }
 
+
     // Quick Play / Matchmaking
     async findPubic(req, res) {
         try {
@@ -72,6 +73,33 @@ class MatchController {
         } catch (error) {
             console.error("Find Match Error:", error);
             return res.status(400).json({ success: false, message: error.message });
+        }
+    }
+
+    // Check if user is in an active game
+    async getActiveMatch(req, res) {
+        try {
+            const userId = req.user._id;
+            const match = await MatchService.getActiveMatch(userId);
+
+            if (!match) {
+                return res.status(200).json({
+                    success: true,
+                    message: "No active match found",
+                    data: null,
+                    isInGame: false
+                });
+            }
+
+            return res.status(200).json({
+                success: true,
+                message: "Active match found",
+                data: match,
+                isInGame: true
+            });
+        } catch (error) {
+            console.error("Get Active Match Error:", error);
+            return res.status(500).json({ success: false, message: error.message });
         }
     }
 }
