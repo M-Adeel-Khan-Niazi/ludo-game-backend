@@ -15,7 +15,9 @@ const walletTransactionSchema = new Schema(
         "COIN_PURCHASE",
         "TRANSFER_IN",
         "TRANSFER_OUT",
-        "WITHDRAWAL"
+        "WITHDRAWAL",
+        "GIFT_SENT",
+        "GIFT_RECEIVED"
       ]
     },
 
