@@ -17,6 +17,7 @@ router.post(
 
 // Signin routes
 router.post("/sign-in", controller.signIn.bind(controller));
+router.post("/admin/sign-in", controller.adminSignIn.bind(controller));
 router.post("/phone-sign-in", controller.phoneSignIn.bind(controller));
 
 // OTP routes

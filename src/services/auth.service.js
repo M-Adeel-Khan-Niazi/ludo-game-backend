@@ -170,7 +170,7 @@ class Service {
         return handlers.response.failed({
           res,
           message: "Account is not verified. Please verify your account.",
-          error: { userId: user._id, isVerified: false},
+          error: { userId: user._id, isVerified: false },
         });
       }
 
@@ -264,6 +264,59 @@ class Service {
           res,
           message: "Account not verified. Please verify your account first.",
           error: { userId: user.id, isVerified: false }
+        });
+      }
+      const payload = { _id: user._id };
+      const authToken = generateToken(payload);
+
+      return handlers.response.success({
+        res,
+        message: "Login successful",
+        data: { user, token: authToken },
+      });
+    } catch (error) {
+      logger.error({ message: error.message });
+      return handlers.response.error({ res, message: error.message });
+    }
+  }
+
+  async adminSignIn(req, res) {
+    try {
+      const { email, password } = req.body;
+
+      if (!email && !password) {
+        return handlers.response.failed({
+          res,
+          message: "Email or password is required...",
+        });
+      }
+
+      if (email && !emailValidator(email)) {
+        return handlers.response.failed({ res, message: "Invalid email..." });
+      }
+
+      const user = await this.user.findOne({
+        email,
+        role: "admin"
+      });
+      if (!user) {
+        return handlers.response.unavailable({
+          res,
+          message: "Account not found. Please sign up first.",
+        });
+      }
+      const isMatch = await bcrypt.compare(password, user.password);
+      if (!isMatch) {
+        return handlers.response.failed({
+          res,
+          message: "Incorrect password.",
+        });
+      }
+
+      if (user.isDeleted) {
+        return handlers.response.failed({
+          res,
+          message: "Login failed. This account is no longer active.",
         });
       }
       const payload = { _id: user._id };
