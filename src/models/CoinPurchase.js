@@ -17,7 +17,7 @@ const coinPurchaseSchema = new Schema(
 
     provider: {
       type: String,
-      enum: ["GOOGLE", "APPLE", "JAZZCASH", "EASYPAISA", "PAYFAST"]
+      enum: ["GOOGLE", "APPLE", "JAZZCASH", "EASYPAISA", "PAYFAST", "STRIPE"]
     },
     status: { type: String, enum: ["PENDING", "SUCCESS", "FAILED"] }
   },

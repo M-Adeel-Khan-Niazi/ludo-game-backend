@@ -7,6 +7,7 @@ const matchRoutes = require("./users/match.route");
 const supportRoutes = require("./users/support.route");
 const socialRoutes = require("./users/social.route");
 const tournamentRoutes = require("./users/tournament.route");
+const paymentRoutes = require("./users/payment.route");
 const packageRoutes = require("./admin/package.route");
 const adminUserRoutes = require("./admin/user.route");
 
@@ -17,6 +18,7 @@ router.use("/matches", matchRoutes);
 router.use("/support", supportRoutes);
 router.use("/social", socialRoutes);
 router.use("/tournaments", tournamentRoutes);
+router.use("/payments", paymentRoutes);
 router.use("/packages", packageRoutes);
 router.use("/admin/users", adminUserRoutes);
 
