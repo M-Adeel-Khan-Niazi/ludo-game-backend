@@ -74,10 +74,7 @@ class TournamentService {
      * Register a player for a tournament
      */
     async registerPlayer(userId, tournamentId) {
-        const tournament = await Tournament.findById(tournamentId)
-            .populate("players.userId", "_id fullName avatar playerStats")
-            .populate("winner", "_id fullName avatar")
-            .populate("rounds.matches.winner", "_id fullName avatar");
+        const tournament = await Tournament.findById(tournamentId);
         if (!tournament) throw new Error("Tournament not found");
         if (tournament.status !== "REGISTRATION") throw new Error("Registration is closed");
         if (tournament.players.length >= tournament.maxPlayers) throw new Error("Tournament is full");
@@ -93,12 +90,15 @@ class TournamentService {
         tournament.players.push({ userId, registeredAt: new Date() });
         await tournament.save();
 
+        // Re-fetch populated tournament to ensure new player is populated correctly
+        const updatedTournament = await this.getTournament(tournamentId);
+
         // Auto-start when full
-        if (tournament.players.length === tournament.maxPlayers) {
-            return { tournament, shouldStart: true };
+        if (updatedTournament.players.length === updatedTournament.maxPlayers) {
+            return { tournament: updatedTournament, shouldStart: true };
         }
 
-        return { tournament, shouldStart: false };
+        return { tournament: updatedTournament, shouldStart: false };
     }
 
     /**
