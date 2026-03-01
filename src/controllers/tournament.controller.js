@@ -55,6 +55,8 @@ class TournamentController {
                 global.io.emit("tournament:playerRegistered", {
                     tournamentId: tournament._id,
                     playersCount: tournament.players.length,
+                    players: tournament.players,
+                    winner: tournament.winner,
                     maxPlayers: tournament.maxPlayers
                 });
             }

@@ -58,7 +58,10 @@ class TournamentService {
      * Register a player for a tournament
      */
     async registerPlayer(userId, tournamentId) {
-        const tournament = await Tournament.findById(tournamentId);
+        const tournament = await Tournament.findById(tournamentId)
+            .populate("players.userId", "_id fullName avatar playerStats")
+            .populate("winner", "_id fullName avatar")
+            .populate("rounds.matches.winner", "_id fullName avatar");
         if (!tournament) throw new Error("Tournament not found");
         if (tournament.status !== "REGISTRATION") throw new Error("Registration is closed");
         if (tournament.players.length >= tournament.maxPlayers) throw new Error("Tournament is full");
