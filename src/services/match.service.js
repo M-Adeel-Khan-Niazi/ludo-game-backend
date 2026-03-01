@@ -247,13 +247,14 @@ class MatchService {
      * Settle game for a natural win
      */
     async settleGame(match, winnerId) {
-        if (match.state === "COMPLETED") return;
+        if (match.state === "COMPLETED") return { prize: match.winningAmount || 0 };
 
         const { GameLogic } = require("./game.logic");
 
         // Prize Calculation
         const pool = match.joiningFee * match.players.length;
         const netPrize = Math.floor(pool * match.winningMultiplier);
+        const prize = netPrize;
         const adminDiff = pool - netPrize;
 
         const paidUserIds = new Set();

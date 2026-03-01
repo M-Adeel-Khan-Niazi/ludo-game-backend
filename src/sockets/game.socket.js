@@ -54,6 +54,48 @@ module.exports = (io, socket) => {
         }
     });
 
+    // Get Current Game State (Reconnect / Refresh without side effects)
+    socket.on("game:getActiveGameState", async ({ matchId }) => {
+        try {
+            const match = await Match.findById(matchId).populate({
+                path: "players.userId",
+                select: "_id fullName playerStats avatar"
+            }).populate({
+                path: "currentTurn.userId",
+                select: "_id fullName playerStats avatar"
+            });
+
+            if (!match) return socket.emit("error", { message: "Match not found" });
+
+            const player = match.players.find(p => p.userId._id.toString() === socket.user._id.toString());
+            if (!player) return socket.emit("error", { message: "You are not in this match" });
+
+            // Ensure user is in the socket room for future updates
+            const roomName = `game:${matchId}`;
+            if (!socket.rooms.has(roomName)) {
+                socket.join(roomName);
+            }
+
+            // Update status if they were disconnected (Silent update)
+            if (player.status === "DISCONNECTED") {
+                player.status = "ACTIVE";
+                player.disconnectedAt = null;
+                await match.save();
+            }
+
+            // Emit state ONLY to the requester
+            socket.emit("game:state", match);
+
+            // Ensure timer is running if it's a running game (idempotent check inside startTimer)
+            if (match.state === "RUNNING" && match.currentTurn && match.currentTurn.userId) {
+                startTimer(io, matchId, match.currentTurn.turn);
+            }
+
+        } catch (err) {
+            logger.error("GetGameState Error:", err);
+            socket.emit("error", { message: "Internal server error" });
+        }
+    });
 
     // Leave Game (Rule: Handle creator leave, 1v1 forfeit, etc.)
     socket.on("game:leaveMatch", async ({ matchId }) => {

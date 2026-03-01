@@ -39,6 +39,22 @@ class TournamentService {
     }
 
     /**
+     * Get all active tournaments (REGISTRATION state)
+     */
+    async getActiveTournaments() {
+        let tournaments = await Tournament.find({ status: "REGISTRATION" })
+            .populate("players.userId", "_id fullName avatar playerStats")
+            .sort({ entryFee: 1 });
+
+        if (tournaments.length === 0) {
+            await this.ensureActiveTournament();
+            return this.getActiveTournaments(); // Recursively call to get the newly created one
+        }
+
+        return tournaments;
+    }
+
+    /**
      * Create a new tournament
      */
     async createTournament(adminId, { name, entryFee, winningMultiplier = 0.85 }) {

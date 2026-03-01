@@ -5,9 +5,8 @@ class TournamentController {
     // Get the currently active tournament (REGISTRATION state)
     async getActive(req, res) {
         try {
-            const tournament = await TournamentService.ensureActiveTournament();
-            const populated = await TournamentService.getTournament(tournament._id);
-            return res.status(200).json({ success: true, data: populated });
+            const tournaments = await TournamentService.getActiveTournaments();
+            return res.status(200).json({ success: true, data: tournaments });
         } catch (error) {
             console.error("Get Active Tournament Error:", error);
             return res.status(400).json({ success: false, message: error.message });
@@ -25,22 +24,22 @@ class TournamentController {
             if (shouldStart) {
                 // Start tournament asynchronously
                 TournamentService.startTournament(tournament._id)
-                    .then(started => {
+                    .then(async (started) => {
                         if (global.io) {
                             const semiFinalRound = started.rounds.find(r => r.roundNumber === 1);
                             if (semiFinalRound) {
+                                const Match = require("../models/Match");
                                 for (const matchEntry of semiFinalRound.matches) {
-                                    const Match = require("../models/Match");
-                                    Match.findById(matchEntry.matchId).then(match => {
-                                        if (!match) return;
-                                        match.players.forEach(p => {
-                                            global.io.to(`user:${p.userId}`).emit("tournament:started", {
-                                                tournamentId: started._id,
-                                                matchId: match._id,
-                                                tableNumber: matchEntry.tableNumber,
-                                                color: p.color,
-                                                message: "Tournament started! Join your table."
-                                            });
+                                    const match = await Match.findById(matchEntry.matchId);
+                                    if (!match) continue;
+
+                                    match.players.forEach(p => {
+                                        global.io.to(`user:${p.userId}`).emit("tournament:started", {
+                                            tournamentId: started._id,
+                                            matchId: match._id,
+                                            tableNumber: matchEntry.tableNumber,
+                                            color: p.color,
+                                            message: "Tournament started! Join your table."
                                         });
                                     });
                                 }

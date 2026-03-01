@@ -10,7 +10,7 @@
   },
   "author": "adeel-niazi",
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.910.0",
+    "@aws-sdk/client-s3": "^3.893.0",
     "agora-access-token": "^2.0.4",
     "axios": "^1.13.2",
     "bcrypt": "^6.0.0",
