@@ -276,21 +276,67 @@ class WalletService {
     }
 
     /**
-     * Get purchase history for a user
+     * Get purchase history for a user (or all if admin)
      * @param {String} userId
      * @param {Number} page
      * @param {Number} limit
+     * @param {String} search
+     * @param {Boolean} isAdmin
      */
-    async getPurchaseHistory(userId, page = 1, limit = 10) {
+    async getPurchaseHistory(userId, page = 1, limit = 10, search = "", isAdmin = false) {
         const CoinPurchase = require("../models/CoinPurchase");
+        const User = require("../models/User");
+        const CoinPackage = require("../models/CoinPackage");
+
         const skip = (page - 1) * limit;
-        const purchases = await CoinPurchase.find({ userId })
-            .populate("packageId", "title pricePKR coins bonusCoins")
+        let query = {};
+
+        if (!isAdmin) {
+            query.userId = userId;
+        }
+
+        if (search) {
+            const regex = new RegExp(search, "i");
+
+            // Find users matching search
+            const users = await User.find({
+                $or: [{ fullName: regex }, { userName: regex }, { email: regex }]
+            }, "_id");
+            const userIds = users.map(u => u._id);
+
+            // Find packages matching search
+            const packages = await CoinPackage.find({ title: regex }, "_id");
+            const packageIds = packages.map(p => p._id);
+
+            // Filter purchases by either user or package match
+            if (isAdmin) {
+                query.$or = [
+                    { userId: { $in: userIds } },
+                    { packageId: { $in: packageIds } },
+                    { transactionId: regex }
+                ];
+            } else {
+                // If not admin, restrict to their userId but allow searching package/transaction
+                query.$and = [
+                    { userId: userId },
+                    {
+                        $or: [
+                            { packageId: { $in: packageIds } },
+                            { transactionId: regex }
+                        ]
+                    }
+                ];
+            }
+        }
+
+        const purchases = await CoinPurchase.find(query)
+            .populate("packageId")
+            .populate("userId", "fullName userName email avatar")
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit);
 
-        const total = await CoinPurchase.countDocuments({ userId });
+        const total = await CoinPurchase.countDocuments(query);
 
         return {
             purchases,
