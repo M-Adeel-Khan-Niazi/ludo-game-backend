@@ -85,14 +85,25 @@ class WalletController {
 
     /**
      * Get package purchase history
-     * GET /api/wallet/purchase-history?page=1&limit=10
+     * GET /api/wallet/purchase-history?page=1&limit=10&search=xyz
      */
     async getPurchaseHistory(req, res) {
         try {
-            const { page = 1, limit = 10 } = req.query;
+            const { page = 1, limit = 10, search = "" } = req.query;
             const userId = req.user._id;
+            const isAdmin = req.user.role === "admin";
 
-            const history = await WalletService.getPurchaseHistory(userId, parseInt(page), parseInt(limit));
+            // Support an explicit userId query param for admin looking at specific user
+            const targetUserId = (isAdmin && req.query.userId) ? req.query.userId : userId;
+            const treatAsAdmin = isAdmin && !req.query.userId;
+
+            const history = await WalletService.getPurchaseHistory(
+                targetUserId,
+                parseInt(page),
+                parseInt(limit),
+                search,
+                treatAsAdmin
+            );
 
             return res.status(200).json({
                 success: true,

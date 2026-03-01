@@ -1,4 +1,6 @@
 const User = require("../models/User");
+const Match = require("../models/Match");
+const Transaction = require("../models/WalletTransaction");
 
 class AdminUserService {
     /**
@@ -40,6 +42,13 @@ class AdminUserService {
         const user = await User.findOne({ _id: userId, isDeleted: false });
         if (!user) throw new Error("User not found");
         return user;
+    }
+
+    async getUserMatches(userId) {
+        const matches = await Match.find({
+            "players.userId": userId
+        }).populate("players.userId", "_id fullName avatar");
+        return matches;
     }
 
     /**
