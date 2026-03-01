@@ -27,11 +27,12 @@ class AdminUserController {
         try {
             const { id } = req.params;
             const user = await AdminUserService.getUserDetail(id);
+            const matches = await AdminUserService.getUserMatches(id);
 
             return res.status(200).json({
                 success: true,
                 message: "User detail fetched successfully",
-                data: user
+                data: { user, matches }
             });
         } catch (error) {
             console.error("Admin Get User Detail Error:", error);
