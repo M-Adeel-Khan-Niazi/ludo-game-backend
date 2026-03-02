@@ -102,6 +102,30 @@ class TournamentService {
     }
 
     /**
+     * Player leaves tournament (only during REGISTRATION)
+     */
+    async leaveTournament(userId, tournamentId) {
+        const tournament = await Tournament.findById(tournamentId);
+        if (!tournament) throw new Error("Tournament not found");
+
+        if (tournament.status !== "REGISTRATION") {
+            throw new Error("Cannot leave tournament. It has already started or ended.");
+        }
+
+        const playerIndex = tournament.players.findIndex(p => p.userId.toString() === userId.toString());
+        if (playerIndex === -1) throw new Error("You are not registered in this tournament");
+
+        // Refund entry fee
+        await WalletService.cancelGame(userId, tournament.entryFee, tournamentId);
+
+        // Remove player
+        tournament.players.splice(playerIndex, 1);
+        await tournament.save();
+
+        return tournament;
+    }
+
+    /**
      * Start tournament - create 4 semi-final matches
      */
     async startTournament(tournamentId) {

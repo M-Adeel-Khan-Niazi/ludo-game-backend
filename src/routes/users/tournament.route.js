@@ -15,6 +15,9 @@ router.get("/:id", authenticateJwt, TournamentController.getById.bind(Tournament
 // Register for tournament
 router.post("/:id/register", authenticateJwt, TournamentController.register.bind(TournamentController));
 
+// Leave tournament
+router.post("/:id/leave", authenticateJwt, TournamentController.leave.bind(TournamentController));
+
 // Cancel tournament
 router.post("/:id/cancel", authenticateJwt, TournamentController.cancel.bind(TournamentController));
 

@@ -465,7 +465,15 @@ class GameLogic {
             else losers.push(playerObj);
         });
 
-        return { winners, losers, reason, matchId, totalPrize };
+        return {
+            winners,
+            losers,
+            reason,
+            matchId,
+            totalPrize,
+            gameType: match.gameType,
+            tournamentId: match.tournamentId
+        };
     }
 }
 module.exports = {

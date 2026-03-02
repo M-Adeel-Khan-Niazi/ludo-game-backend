@@ -76,6 +76,38 @@ class TournamentController {
         }
     }
 
+    // Player: Leave tournament
+    async leave(req, res) {
+        try {
+            const { id } = req.params;
+            const userId = req.user._id;
+
+            const tournament = await TournamentService.leaveTournament(userId, id);
+
+            // Broadcast update so other clients see the count decrease
+            if (global.io) {
+                global.io.emit("tournament:playerLeft", {
+                    tournamentId: tournament._id,
+                    playersCount: tournament.players.length,
+                    maxPlayers: tournament.maxPlayers,
+                    userId
+                });
+            }
+
+            return res.status(200).json({
+                success: true,
+                message: "Left tournament successfully",
+                data: {
+                    tournamentId: tournament._id,
+                    playersCount: tournament.players.length
+                }
+            });
+        } catch (error) {
+            console.error("Leave Tournament Error:", error);
+            return res.status(400).json({ success: false, message: error.message });
+        }
+    }
+
     // Get tournament details by ID
     async getById(req, res) {
         try {
