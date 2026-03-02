@@ -34,7 +34,8 @@ class TournamentController {
                                     if (!match) continue;
 
                                     match.players.forEach(p => {
-                                        global.io.to(`user:${p.userId}`).emit("tournament:started", {
+                                        const targetId = p.userId._id ? p.userId._id.toString() : p.userId.toString();
+                                        global.io.to(`user:${targetId}`).emit("tournament:started", {
                                             tournamentId: started._id,
                                             matchId: match._id,
                                             tableNumber: matchEntry.tableNumber,
@@ -51,12 +52,15 @@ class TournamentController {
 
             // Broadcast registration update
             if (global.io) {
-                global.io.emit("tournament:playerRegistered", {
-                    tournamentId: tournament._id,
-                    playersCount: tournament.players.length,
-                    players: tournament.players,
-                    winner: tournament.winner,
-                    maxPlayers: tournament.maxPlayers
+                tournament.players.forEach(p => {
+                    const targetId = p.userId._id ? p.userId._id.toString() : p.userId.toString();
+                    global.io.to(`user:${targetId}`).emit("tournament:playerRegistered", {
+                        tournamentId: tournament._id,
+                        playersCount: tournament.players.length,
+                        players: tournament.players,
+                        winner: tournament.winner,
+                        maxPlayers: tournament.maxPlayers
+                    });
                 });
             }
 
@@ -82,15 +86,20 @@ class TournamentController {
             const { id } = req.params;
             const userId = req.user._id;
 
-            const tournament = await TournamentService.leaveTournament(userId, id);
+            await TournamentService.leaveTournament(userId, id);
+            const tournament = await TournamentService.getTournament(id);
 
             // Broadcast update so other clients see the count decrease
             if (global.io) {
-                global.io.emit("tournament:playerLeft", {
-                    tournamentId: tournament._id,
-                    playersCount: tournament.players.length,
-                    maxPlayers: tournament.maxPlayers,
-                    userId
+                tournament.players.forEach(p => {
+                    const targetId = p.userId._id ? p.userId._id.toString() : p.userId.toString();
+                    global.io.to(`user:${targetId}`).emit("tournament:playerLeft", {
+                        tournamentId: tournament._id,
+                        playersCount: tournament.players.length,
+                        players: tournament.players,
+                        winner: tournament.winner,
+                        maxPlayers: tournament.maxPlayers
+                    });
                 });
             }
 
@@ -142,7 +151,8 @@ class TournamentController {
 
             if (global.io) {
                 tournament.players.forEach(p => {
-                    global.io.to(`user:${p.userId}`).emit("tournament:cancelled", {
+                    const targetId = p.userId._id ? p.userId._id.toString() : p.userId.toString();
+                    global.io.to(`user:${targetId}`).emit("tournament:cancelled", {
                         tournamentId: tournament._id,
                         message: "Tournament cancelled. Entry fee refunded."
                     });
