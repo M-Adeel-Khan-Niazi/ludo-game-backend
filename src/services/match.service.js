@@ -368,21 +368,56 @@ class MatchService {
     /**
      * Get active match for a user
      */
-    async getActiveMatch(userId) {
+    async getUserGameStatus(userId) {
+        // 1. Check for Active Match (Running or Waiting) - Highest Priority
         const match = await Match.findOne({
             state: { $in: ["WAITING", "RUNNING"] },
             "players.userId": userId
         })
-            .populate({
-                path: "players.userId",
-                select: "_id fullName playerStats avatar"
-            })
-            .populate({
-                path: "currentTurn.userId",
-                select: "_id fullName playerStats avatar"
-            });
+        .populate({
+            path: "players.userId",
+            select: "_id fullName playerStats avatar"
+        })
+        .populate({
+            path: "currentTurn.userId",
+            select: "_id fullName playerStats avatar"
+        });
 
-        return match;
+        if (match) {
+            return {
+                userStatus: "IN_GAME",
+                data: match
+            };
+        }
+
+        // 2. Check for Tournament Status
+        const Tournament = require("../models/Tournament");
+        // Find the latest tournament the user is involved in
+        const tournament = await Tournament.findOne({
+            "players.userId": userId
+        }).sort({ createdAt: -1 })
+        .populate("players.userId", "_id fullName avatar");
+
+        if (tournament) {
+            // Case: Registered but not started
+            if (tournament.status === "REGISTRATION") {
+                return { userStatus: "REGISTERED", data: tournament };
+            }
+
+            // Case: Tournament Active (Semi/Final) but NOT in a match (Waiting/Eliminated)
+            if (tournament.status === "SEMI_FINAL" || tournament.status === "FINAL") {
+                return { userStatus: "IN_TOURNAMENT", data: tournament };
+            }
+
+            // Case: Completed or Cancelled (Return only if recent, e.g., last 24h, to avoid stuck state)
+            if (["COMPLETED", "CANCELLED"].includes(tournament.status)) {
+                // Optional: You can add a time check here if needed
+                return { userStatus: tournament.status, data: tournament };
+            }
+        }
+
+        // 3. User is Idle
+        return { userStatus: "IDLE", data: null };
     }
 }
 

@@ -77,25 +77,16 @@ class MatchController {
     }
 
     // Check if user is in an active game
-    async getActiveMatch(req, res) {
+    async getUserGameStatus(req, res) {
         try {
             const userId = req.user._id;
-            const match = await MatchService.getActiveMatch(userId);
-
-            if (!match) {
-                return res.status(200).json({
-                    success: true,
-                    message: "No active match found",
-                    data: null,
-                    isInGame: false
-                });
-            }
+            const result = await MatchService.getUserGameStatus(userId);
 
             return res.status(200).json({
                 success: true,
-                message: "Active match found",
-                data: match,
-                isInGame: true
+                message: "User status fetched",
+                userStatus: result.userStatus, // "IN_GAME", "REGISTERED", "IN_TOURNAMENT", "IDLE", "COMPLETED"
+                data: result.data
             });
         } catch (error) {
             console.error("Get Active Match Error:", error);
