@@ -20,27 +20,39 @@ cron.schedule("*/5 * * * * *", async () => {
 
                 for (const player of match.players) {
                     if (player.status === 'DISCONNECTED' && player.disconnectedAt && new Date(player.disconnectedAt) < twoMinutesAgo) {
-                        player.status = 'LEFT';
+                        logger.info(`Player ${player.userId} in match ${match._id} disqualified due to 2 min disconnect timeout.`);
+
+                        const MatchService = require('../services/match.service');
+
+                        try {
+                            const result = await MatchService.leaveMatch(match._id.toString(), player.userId.toString());
+
+                            if (global.io) {
+                                if (result.action === "GAME_ENDED") {
+                                    global.io.to(`game:${match._id}`).emit("game:playerLeft", { userId: player.userId, state: "COMPLETED" });
+                                    const payload = await GameLogic.getGameOverPayload(match._id.toString(), result.winnerId, result.reason || "Opponent Timed Out", result.winnerAmount);
+                                    global.io.to(`game:${match._id}`).emit("game:gameOver", payload);
+                                } else if (result.action === "PLAYER_LEFT_GAME") {
+                                    global.io.to(`game:${match._id}`).emit("game:playerLeft", { userId: player.userId, state: "RUNNING", status: "DISQUALIFIED" });
+
+                                    if (result.match && result.match.currentTurn && result.match.currentTurn.userId.toString() === player.userId.toString()) {
+                                        const { clearTimer } = require('../services/timer.service');
+                                        clearTimer(match._id.toString(), result.match.currentTurn.turn);
+                                        await GameLogic.switchTurn(global.io, result.match, logger);
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            logger.error(`Error kicking player ${player.userId}:`, e);
+                        }
+
                         changed = true;
-                        logger.info(`Player ${player.userId} in match ${match._id} marked as LEFT due to disconnect timeout.`);
-                        // Note: MatchService.leaveMatch handles settling loss. This is a simplified version.
+                        break; // Important: match array might be stale now, move to next tick
                     }
                 }
 
                 if (changed) {
-                    const remainingPlayers = match.players.filter(p => p.status !== 'LEFT' && p.status !== 'DISQUALIFIED');
-                    if (remainingPlayers.length === 1) {
-                        const winner = remainingPlayers[0];
-                        logger.info(`Match ${match._id} ending due to disconnect timeouts. Winner: ${winner.userId}`);
-                        const matchService = require('../services/match.service');
-                        await matchService.settleGame(match, winner.userId); // This will save the match
-                    } else if (remainingPlayers.length === 0) {
-                        match.state = 'ABANDONED';
-                        logger.info(`Match ${match._id} abandoned as all players timed out.`);
-                        await match.save();
-                    } else {
-                        await match.save();
-                    }
+                    continue; // Skip the rest of this lock tick, wait for next cron interval
                 }
             } catch (e) {
                 logger.error(`Cron Disconnect Timeout Error for match ${match._id}:`, e);

@@ -163,11 +163,14 @@ module.exports = (io, socket) => {
             if (!isPlayer) return socket.emit("error", { message: "Access denied" });
 
             const ChatMessage = require("../models/ChatMessage");
+            const { cleanMessage } = require("../utils/profanityFilter");
+            const cleanContent = type === 'text' ? cleanMessage(content) : content;
+
             const message = await ChatMessage.create({
                 matchId,
                 sender: socket.user._id,
                 type: type || 'text',
-                content
+                content: cleanContent
             });
 
             const messageData = {
@@ -391,29 +394,6 @@ module.exports = (io, socket) => {
                 return;
             }
 
-            if (result.bonusTurn) {
-                match.currentTurn.rollingPhase = true;
-                match.currentTurn.pendingBonus = false;
-                match.currentTurn.turnDeadline = new Date(Date.now() + 15000);
-                await match.save();
-
-                const reason = result.bonusReason || 'bonus';
-                const messages = {
-                    capture: "Token Captured! Bonus turn! Roll again...",
-                    home: "Token reached home! Bonus turn! Roll again...",
-                    bonus: "Bonus turn! Roll again..."
-                };
-
-                io.to(roomName).emit("game:turnContinued", {
-                    userId: socket.user._id,
-                    message: messages[reason] || messages.bonus,
-                    extraTurn: true,
-                    reason
-                });
-                startTimer(io, matchId, match.currentTurn.turn);
-                return;
-            }
-
             const allDiceUsed = result.allDiceUsed;
 
             if (!allDiceUsed) {
@@ -443,6 +423,31 @@ module.exports = (io, socket) => {
                     startTimer(io, matchId, match.currentTurn.turn);
                     return;
                 }
+            }
+
+            if (match.currentTurn.pendingBonus) {
+                match.currentTurn.rollingPhase = true;
+                match.currentTurn.pendingBonus = false;
+                match.currentTurn.usedDiceIndices = [];
+                match.currentTurn.diceValues = [];
+                match.currentTurn.turnDeadline = new Date(Date.now() + 15000);
+                await match.save();
+
+                const reason = result.bonusReason || 'bonus';
+                const messages = {
+                    capture: "Token Captured! Bonus turn! Roll again...",
+                    home: "Token reached home! Bonus turn! Roll again...",
+                    bonus: "Bonus turn! Roll again..."
+                };
+
+                io.to(roomName).emit("game:turnContinued", {
+                    userId: socket.user._id,
+                    message: messages[reason] || messages.bonus,
+                    extraTurn: true,
+                    reason
+                });
+                startTimer(io, matchId, match.currentTurn.turn);
+                return;
             }
 
             await GameLogic.switchTurn(io, match, logger);
