@@ -12,6 +12,9 @@ router.post("/find", authenticateJwt, MatchController.findPubic.bind(MatchContro
 // Join specific match (by RoomCode or ID)
 router.post("/join", authenticateJwt, MatchController.join.bind(MatchController));
 
+// Get room joining fee
+router.post("/room-fee", authenticateJwt, MatchController.getRoomFee.bind(MatchController));
+
 // Check user game status
 router.get("/game-status", authenticateJwt, MatchController.getUserGameStatus.bind(MatchController));
 

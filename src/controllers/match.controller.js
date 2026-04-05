@@ -93,6 +93,36 @@ class MatchController {
             return res.status(500).json({ success: false, message: error.message });
         }
     }
+
+    // Get joining fee against a room code
+    async getRoomFee(req, res) {
+        try {
+            const { roomCode } = req.body;
+
+            if (!roomCode) {
+                return res.status(400).json({ success: false, message: "Room code is required" });
+            }
+
+            const match = await Match.findOne({ roomCode });
+            
+            if (!match) {
+                return res.status(404).json({ success: false, message: "Match does not exist" });
+            }
+            
+            if (match.state !== "WAITING") {
+                return res.status(400).json({ success: false, message: "Match has already started or ended" });
+            }
+
+            return res.status(200).json({
+                success: true,
+                message: "Room joining fee fetched successfully",
+                data: { joiningFee: match.joiningFee, gameType: match.gameType }
+            });
+        } catch (error) {
+            console.error("Get Room Fee Error:", error);
+            return res.status(500).json({ success: false, message: error.message });
+        }
+    }
 }
 
 module.exports = new MatchController();

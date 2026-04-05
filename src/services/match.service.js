@@ -25,7 +25,7 @@ class MatchService {
             joiningFee,
             isPrivate,
             roomCode: generateRoomCode(),
-            maxPlayers: (gameType === '4P' || gameType === '2V2') ? 4 : 2,
+            maxPlayers: (gameType === '4P' || gameType === '2V2' || isPrivate) ? 4 : 2,
             players: [], // We add creator after locking
             winningMultiplier: isPrivate ? 0.9 : 0.85, // Example config
             state: "WAITING",
@@ -95,25 +95,26 @@ class MatchService {
 
         // Determine color/position
         const usedColors = match.players.map(p => p.color);
-        const allColors = ["red", "green", "yellow", "blue"];
+        // Custom Color Order: Red -> Yellow -> Green -> Blue
+        const allColors = ["red", "yellow", "green", "blue"];
         const nextColor = allColors.find(c => !usedColors.includes(c));
 
         match.players.push({
             userId,
-            color: match.gameType === "1V1" ? 'yellow' : nextColor, // 1v1 usually Red vs Yellow
+            color: nextColor, 
             status: "ACTIVE",
             team: match.gameType === "2V2" ? (match.players.length % 2) + 1 : null,
             isHost: false,
             tokens: [
-                { tokenId: `${(match.gameType === "1V1" ? 'yellow' : nextColor)[0].toUpperCase()}1`, position: -1, isFinished: false },
-                { tokenId: `${(match.gameType === "1V1" ? 'yellow' : nextColor)[0].toUpperCase()}2`, position: -1, isFinished: false },
-                { tokenId: `${(match.gameType === "1V1" ? 'yellow' : nextColor)[0].toUpperCase()}3`, position: -1, isFinished: false },
-                { tokenId: `${(match.gameType === "1V1" ? 'yellow' : nextColor)[0].toUpperCase()}4`, position: -1, isFinished: false }
+                { tokenId: `${nextColor[0].toUpperCase()}1`, position: -1, isFinished: false },
+                { tokenId: `${nextColor[0].toUpperCase()}2`, position: -1, isFinished: false },
+                { tokenId: `${nextColor[0].toUpperCase()}3`, position: -1, isFinished: false },
+                { tokenId: `${nextColor[0].toUpperCase()}4`, position: -1, isFinished: false }
             ]
         });
 
-        // Check if full
-        if (match.players.length === match.maxPlayers) {
+        // Check if full (Private matches must be manually started)
+        if (match.players.length === match.maxPlayers && !match.isPrivate) {
             match.state = "RUNNING"; // Ready to start
 
             // Initialize Turn (Red goes first usually)
@@ -156,23 +157,37 @@ class MatchService {
      */
     async leaveMatch(matchId, userId) {
         const match = await Match.findById(matchId);
-        if (!match) throw new Error("Match not found");
+        if (!match) return { action: "ALREADY_DELETED" };
 
         const playerIndex = match.players.findIndex(p => p.userId.toString() === userId.toString());
-        if (playerIndex === -1) throw new Error("Player not in match");
+        if (playerIndex === -1) return { action: "ALREADY_DELETED" };
         const player = match.players[playerIndex];
 
-        // 1. Creator leaves, no players joined (WAITING)
+        // 1. WAITING State
         if (match.state === "WAITING") {
-            // Rule 1: Created match & no player joined (players.length === 1)
-            // Or general leaving lobby logic
-            if (match.players.length === 1) {
-                await WalletService.cancelGame(userId, match.joiningFee, match._id);
-                await Match.deleteOne({ _id: match._id });
-                return { action: "MATCH_DELETED" };
+            // Fallback check to ensure the creator is always treated as host
+            const isActualHost = player.isHost || (match.players[0] && match.players[0].userId.toString() === userId.toString());
+
+            // If the host leaves, or it's the last player leaving
+            if (isActualHost || match.players.length === 1) {
+                // Refund everyone currently in the match
+                for (const p of match.players) {
+                    try {
+                        await WalletService.cancelGame(p.userId, match.joiningFee, match._id);
+                    } catch (err) {
+                        console.error(`Error refunding player ${p.userId} on match cancel:`, err.message);
+                    }
+                }
+                match.state = "CANCELLED"; // Update state in memory for the final socket broadcast
+                await Match.findByIdAndDelete(match._id); // Hard delete from database
+                return { action: "MATCH_CANCELLED_BY_HOST", match };
             } else {
-                // Leaving a lobby with others present
-                await WalletService.cancelGame(userId, match.joiningFee, match._id);
+                // Non-host leaving a lobby with others present
+                try {
+                    await WalletService.cancelGame(userId, match.joiningFee, match._id);
+                } catch (err) {
+                    console.error(`Error refunding player ${userId} on match leave:`, err.message);
+                }
                 match.players.splice(playerIndex, 1);
                 await match.save();
                 return { action: "PLAYER_LEFT_LOBBY", match };

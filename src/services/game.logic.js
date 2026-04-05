@@ -34,7 +34,8 @@ class GameLogic {
      * Get the next turn color
      */
     getNextTurnColor(currentMatch) {
-        const colors = ['red', 'green', 'yellow', 'blue'];
+        // Custom Turn Order: Red -> Yellow -> Green -> Blue
+        const colors = ['red', 'yellow', 'green', 'blue'];
         const activePlayers = currentMatch.players
             .filter(p => p.status === 'ACTIVE' || p.status === 'DISCONNECTED')
             .sort((a, b) => colors.indexOf(a.color) - colors.indexOf(b.color));
@@ -83,6 +84,20 @@ class GameLogic {
 
     isValidMove(token, diceValue, player, match) {
         if (token.isFinished) return false;
+
+        // Priority Rule: If player has an unused 6 and locked tokens, they MUST unlock first.
+        if (match && match.currentTurn && match.currentTurn.diceValues && match.currentTurn.usedDiceIndices) {
+            const hasUnusedSix = match.currentTurn.diceValues.some((val, idx) => 
+                val === 6 && !match.currentTurn.usedDiceIndices.includes(idx)
+            );
+            const hasLockedTokens = player.tokens.some(t => t.position === this.STATE_HOME);
+
+            if (hasUnusedSix && hasLockedTokens) {
+                if (diceValue !== 6 || token.position !== this.STATE_HOME) {
+                    return false; // Prevent any other move while forced to unlock
+                }
+            }
+        }
 
         // Rule 1: Must open with 6
         if (token.position === this.STATE_HOME) {
@@ -156,6 +171,18 @@ class GameLogic {
         if (match.currentTurn.usedDiceIndices.includes(diceIndex)) throw new Error("Dice already used");
 
         const diceValue = match.currentTurn.diceValues[diceIndex];
+
+        // Explicit Error check to provide meaningful feedback to the player
+        const hasUnusedSix = match.currentTurn.diceValues.some((val, idx) => 
+            val === 6 && !match.currentTurn.usedDiceIndices.includes(idx)
+        );
+        const hasLockedTokens = player.tokens.some(t => t.position === this.STATE_HOME);
+
+        if (hasUnusedSix && hasLockedTokens) {
+            if (diceValue !== 6 || token.position !== this.STATE_HOME) {
+                throw new Error("Please unlock your tokens first");
+            }
+        }
 
         if (!this.isValidMove(token, diceValue, player, match)) throw new Error("Invalid move");
 

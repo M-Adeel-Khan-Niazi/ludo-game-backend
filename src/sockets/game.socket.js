@@ -39,12 +39,11 @@ module.exports = (io, socket) => {
                 fullName: socket.user.fullName
             });
 
-            // Rule 7: Notify when complete/ready. If running, broadcast state to ensure everyone has up-to-date Turn info.
-            if (match.state === "RUNNING") {
-                io.to(roomName).emit("game:state", match);
-                if (match.currentTurn && match.currentTurn.userId) {
-                    startTimer(io, matchId, match.currentTurn.turn);
-                }
+            // Broadcast updated state to everyone in the room so UI stays perfectly in sync (WAITING or RUNNING)
+            io.to(roomName).emit("game:state", match);
+            
+            if (match.state === "RUNNING" && match.currentTurn && match.currentTurn.userId) {
+                startTimer(io, matchId, match.currentTurn.turn);
             }
 
             logger.info(`User ${socket.user._id} joined game ${matchId}`);
@@ -97,26 +96,91 @@ module.exports = (io, socket) => {
         }
     });
 
+    // Host Starts Private Match
+    socket.on("game:startPrivate", async ({ matchId }) => {
+        const lock = getMatchLock(matchId);
+        const release = await lock.acquire();
+
+        try {
+            const match = await Match.findById(matchId);
+            if (!match) return socket.emit("error", { message: "Match not found" });
+            if (!match.isPrivate) return socket.emit("error", { message: "Not a private match" });
+            if (match.state !== "WAITING") return socket.emit("error", { message: "Match already started or ended" });
+
+            // Verify that requester is the host
+            const player = match.players.find(p => p.userId.toString() === socket.user._id.toString());
+            if (!player || !player.isHost) return socket.emit("error", { message: "Only the host can start the match" });
+
+            if (match.players.length < 2) return socket.emit("error", { message: "Need at least 2 players to start" });
+
+            match.state = "RUNNING";
+
+            // Initialize Turn
+            const firstPlayer = match.players.find(p => p.color === "red") || match.players[0];
+            match.currentTurn = {
+                userId: firstPlayer.userId,
+                color: firstPlayer.color,
+                diceValues: [],
+                usedDiceIndices: [],
+                rollCount: 0,
+                pendingBonus: false,
+                rollingPhase: true,
+                turn: 1,
+                turnDeadline: new Date(Date.now() + 15000)
+            };
+            
+            await match.save();
+
+            // Re-fetch with populated fields so the UI gets the avatars and names
+            const populatedMatch = await Match.findById(matchId).populate({
+                path: "players.userId",
+                select: "_id fullName playerStats avatar"
+            }).populate({
+                path: "currentTurn.userId",
+                select: "_id fullName playerStats avatar"
+            });
+
+            const roomName = `game:${matchId}`;
+            io.to(roomName).emit("game:state", populatedMatch);
+            
+            startTimer(io, matchId, populatedMatch.currentTurn.turn);
+        } catch (err) {
+            logger.error("Start Private Match Error:", err);
+            socket.emit("error", { message: "Failed to start private match" });
+        } finally {
+            release();
+        }
+    });
+
     // Leave Game (Rule: Handle creator leave, 1v1 forfeit, etc.)
     socket.on("game:leaveMatch", async ({ matchId }) => {
+        const lock = getMatchLock(matchId);
+        const release = await lock.acquire();
         try {
             if (!socket.user) return socket.emit("error", { message: "Unauthorized" });
 
             const result = await MatchService.leaveMatch(matchId, socket.user._id);
 
-            if (result.action === "MATCH_DELETED") {
-                // Determine if we should notify specific people.
-                // Since match is deleted, room might be just the creator.
-                io.to(`game:${matchId}`).emit("game:matchCancelled", { message: "Match cancelled by host" });
+            // Silently handle if the match was already deleted by a concurrent request
+            if (result.action === "ALREADY_DELETED") {
+                socket.leave(`game:${matchId}`);
+                return;
+            }
 
-                // Force leave room
-                const room = io.sockets.adapter.rooms.get(`game:${matchId}`);
-                if (room) {
-                    // In socket.io v4, we can make sockets leave
-                    // But simpler to just let client handle the event
-                }
+            if (result.action === "MATCH_CANCELLED_BY_HOST" || result.action === "MATCH_DELETED") {
+                // Emit the cancelled game state so UI can update gracefully
+                if (result.match) io.to(`game:${matchId}`).emit("game:state", result.match);
+                
+                io.to(`game:${matchId}`).emit("game:matchCancelled", { message: "Match cancelled by host" });
+                
+                // Safely force all connected players to leave the socket room after a short delay
+                // to ensure the emit successfully reaches all clients first
+                setTimeout(() => {
+                    io.socketsLeave(`game:${matchId}`);
+                }, 500);
             }
             else if (result.action === "PLAYER_LEFT_LOBBY") {
+                // if (result.match) io.to(`game:${matchId}`).emit("game:state", result.match); //comment it later if things go weird
                 io.to(`game:${matchId}`).emit("game:playerLeft", { userId: socket.user._id, state: "WAITING" });
                 socket.emit("game:left", { message: "You left the lobby" });
                 socket.leave(`game:${matchId}`);
@@ -148,6 +212,8 @@ module.exports = (io, socket) => {
         } catch (err) {
             logger.error("Leave Error:", err);
             socket.emit("error", { message: err.message || "Leave Error" });
+        } finally {
+            release();
         }
     });
 
@@ -361,9 +427,9 @@ module.exports = (io, socket) => {
                 return socket.emit("error", { message: "Roll dice first" });
             }
 
-            clearTimer(matchId, match.currentTurn.turn);
-
             const result = await GameLogic.applyMove(match, socket.user._id, tokenId, diceIndex);
+
+            clearTimer(matchId, match.currentTurn.turn);
 
             const roomName = `game:${matchId}`;
             if (!socket.rooms.has(roomName)) socket.join(roomName);
@@ -476,17 +542,20 @@ module.exports = (io, socket) => {
                 const release = await lock.acquire();
 
                 try {
-                    const player = match.players.find(p => p.userId.toString() === userId);
+                    const currentMatch = await Match.findById(match._id);
+                    if (!currentMatch || currentMatch.state !== "RUNNING") continue;
+
+                    const player = currentMatch.players.find(p => p.userId.toString() === userId);
                     if (player) {
                         player.status = "DISCONNECTED";
                         player.disconnectedAt = new Date();
-                        await match.save();
+                        await currentMatch.save();
 
                         io.to(`game:${match._id}`).emit("game:playerDisconnected", { userId, message: "Player disconnected. 2 minutes to rejoin." });
 
-                        if (match.currentTurn.userId.toString() === userId) {
-                            clearTimer(match._id, match.currentTurn.turn);
-                            await GameLogic.switchTurn(io, match, logger);
+                        if (currentMatch.currentTurn.userId.toString() === userId) {
+                            clearTimer(currentMatch._id, currentMatch.currentTurn.turn);
+                            await GameLogic.switchTurn(io, currentMatch, logger);
                         }
                     }
                 } finally { release(); }
