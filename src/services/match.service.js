@@ -125,7 +125,8 @@ class MatchService {
                 diceValues: [],
                 usedDiceIndices: [],
                 rollCount: 0,
-                turn: 1 // Initialize turn number
+                turn: 1, // Initialize turn number
+                turnDeadline: new Date(Date.now() + 15000)
             };
         }
 
@@ -197,7 +198,7 @@ class MatchService {
         // 2 & 3. RUNNING
         if (match.state === "RUNNING") {
             // Rule 2: 1v1 -> Opponent Wins
-            if (match.gameType === "1V1") {
+            if (match.gameType && match.gameType.toUpperCase() === "1V1") {
                 const opponent = match.players.find(p => p.userId.toString() !== userId.toString());
                 if (opponent) {
                     // Settle Wallet Logic
@@ -227,22 +228,31 @@ class MatchService {
                 }
             }
 
-            // Rule 3: Other matches -> Mark as LEFT
+            // Rule 3: Other matches → Mark as LEFT
             player.status = "LEFT";
             await WalletService.settleLoss(userId, match.joiningFee, match._id);
 
             player.tokens.forEach(t => t.position = -1);
             await match.save();
 
-            // Check if only 1 player remaining (Last Man Standing)
-            const activePlayers = match.players.filter(p => p.status === "ACTIVE" || p.status === "DISCONNECTED");
-            // Wait, DISCONNECTED might rejoin. But if ACTIVE == 1 and all others LEFT?
-            // "If 3 out of 4 players leave/disconnect".
-            // If disconnected, they have timeouts running. 
-            // If LEFT, they are gone.
-            // If only 1 ACTIVE + DISCONNECTED? 
-            // We should only settle if *everyone else* has LEFT or DISQUALIFIED.
+            // --- 2v2: Check if an entire team is eliminated ---
+            if (match.gameType && match.gameType.toUpperCase() === "2V2") {
+                const leaverTeam = player.team;
+                const teamPlayers = match.players.filter(p => p.team === leaverTeam);
+                const teamEliminated = teamPlayers.every(p => ["LEFT", "DISQUALIFIED"].includes(p.status));
 
+                if (teamEliminated) {
+                    // The entire team is gone — opposing team wins
+                    const opposingTeam = match.players.filter(p => p.team !== leaverTeam && !["LEFT", "DISQUALIFIED"].includes(p.status));
+                    if (opposingTeam.length > 0) {
+                        const winnerId = opposingTeam[0].userId;
+                        const { prize } = await this.settleGame(match, winnerId);
+                        return { action: "GAME_ENDED", winnerId, winnerAmount: prize, reason: "Opponent Team Left", match };
+                    }
+                }
+            }
+
+            // Check if only 1 player remaining (Last Man Standing)
             const remaining = match.players.filter(p => !["LEFT", "DISQUALIFIED"].includes(p.status));
 
             if (remaining.length === 1) {

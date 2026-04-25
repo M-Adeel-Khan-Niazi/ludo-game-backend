@@ -64,6 +64,26 @@ class GameLogic {
         return (relativePos + offset) % 52;
     }
 
+    getNextPosition(token, diceValue, hasCaptured) {
+        if (token.position === this.STATE_HOME) {
+            return diceValue === 6 ? 0 : -1;
+        }
+        let nextPos = token.position + diceValue;
+        if (hasCaptured) {
+            if (token.position <= 50 && nextPos > 50) {
+                nextPos += 1;
+            } else if (token.position <= 51 && nextPos > 51) {
+                nextPos = nextPos % 52;
+            }
+        } else {
+            if (nextPos > 51) {
+                nextPos = nextPos % 52;
+            }
+        }
+        return nextPos;
+    }
+
+
     /**
      * Helper: Check if a global position has a Double (2+ tokens of same color)
      */
@@ -104,19 +124,8 @@ class GameLogic {
             return diceValue === 6;
         }
 
-        let potentialPos = token.position + diceValue;
-
-        // Rule 5: Cannot go to home unless hit someone
-        if (potentialPos > 51) {
-            if (!player.hasCaptured) {
-                // Wrap around 52 -> 0
-                // (51 + 1) % 52 = 0
-                potentialPos = potentialPos % 52;
-            } else {
-                // Enter Home Path
-                if (potentialPos > 57) return false; // Exact throw needed
-            }
-        }
+        let potentialPos = this.getNextPosition(token, diceValue, player.hasCaptured);
+        if (potentialPos > 57) return false; // Exact throw needed
 
         // Rule 3: Double Protection (No single coin can hit double coin)
         // Correction: Move is SAFE, not INVALID. You can land on double, just not capture.
@@ -134,8 +143,7 @@ class GameLogic {
             return false; // Safe exit
         }
 
-        let potentialPos = token.position + diceValue;
-        if (!player.hasCaptured && potentialPos > 51) potentialPos %= 52;
+        let potentialPos = this.getNextPosition(token, diceValue, player.hasCaptured);
         if (potentialPos > 51) return false; // In safe zone/home path
 
         const globalDest = this.toGlobalPosition(player.color, potentialPos);
@@ -158,6 +166,27 @@ class GameLogic {
         return false;
     }
 
+    /**
+     * Check if the current player can capture any opponent token with the available unused dice.
+     */
+    isCapturePossible(match, player, unusedIndices) {
+        if (!match || !player || !unusedIndices || !match.currentTurn || !match.currentTurn.diceValues) {
+            return false;
+        }
+
+        for (const idx of unusedIndices) {
+            const diceValue = match.currentTurn.diceValues[idx];
+            for (const token of player.tokens) {
+                if (token.isFinished) continue;
+                if (this.isValidMove(token, diceValue, player, match)) {
+                    if (this.checkCapture(match, player, token, diceValue)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
 
     async applyMove(match, userId, tokenId, diceIndex) {
         const player = match.players.find(p => p.userId.toString() === userId.toString());
@@ -219,16 +248,7 @@ class GameLogic {
         if (token.position === this.STATE_HOME) {
             token.position = 0;
         } else {
-            let nextPos = token.position + diceValue;
-            if (nextPos > 51) {
-                if (!player.hasCaptured) {
-                    token.position = nextPos % 52;
-                } else {
-                    token.position = nextPos;
-                }
-            } else {
-                token.position = nextPos;
-            }
+            token.position = this.getNextPosition(token, diceValue, player.hasCaptured);
         }
 
         if (token.position === 57) {
@@ -282,6 +302,7 @@ class GameLogic {
 
         match.currentTurn.usedDiceIndices.push(diceIndex);
         match.markModified('currentTurn');
+        match.markModified('players');
 
         const allDiceUsed = match.currentTurn.diceValues.length === match.currentTurn.usedDiceIndices.length;
 
@@ -314,7 +335,7 @@ class GameLogic {
         if (!nextPlayer) {
             match.state = 'ABANDONED';
             await match.save();
-            clearTimer(match._id, match.currentTurn.turn); // Clear any lingering timer
+            clearTimer(match._id, match.currentTurn ? match.currentTurn.turn : 0); // Clear any lingering timer
             logger.info(`[GameLogic] Match ${match._id} abandoned. No active players.`);
             return null;
         }
@@ -333,12 +354,18 @@ class GameLogic {
         };
         await match.save();
 
+        const Match = require("../models/Match");
+        const populatedMatch = await Match.findById(match._id).populate({
+            path: "currentTurn.userId",
+            select: "_id fullName playerStats avatar"
+        });
+
         const roomName = `game:${match._id}`;
-        io.to(roomName).emit("game:turnChanged", match.currentTurn);
+        io.to(roomName).emit("game:turnChanged", populatedMatch.currentTurn);
 
-        startTimer(io, match._id, match.currentTurn.turn);
+        startTimer(io, match._id, populatedMatch.currentTurn.turn);
 
-        return match.currentTurn;
+        return populatedMatch.currentTurn;
     }
 
     checkWinCondition(match) {

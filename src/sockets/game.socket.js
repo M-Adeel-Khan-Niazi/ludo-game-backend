@@ -76,7 +76,7 @@ module.exports = (io, socket) => {
             }
 
             // Update status if they were disconnected (Silent update)
-            if (player.status === "DISCONNECTED") {
+            if (player.status === "DISCONNECTED" && match.state === "RUNNING") {
                 player.status = "ACTIVE";
                 player.disconnectedAt = null;
                 await match.save();
@@ -84,6 +84,19 @@ module.exports = (io, socket) => {
 
             // Emit state ONLY to the requester
             socket.emit("game:state", match);
+
+            // --- CATCH MISSED GAME OVER ---
+            // If the match ended while they were offline, emit the results so their UI transitions.
+            if (match.state === "COMPLETED") {
+                const payload = await GameLogic.getGameOverPayload(
+                    match._id, 
+                    match.winner, 
+                    "Match Finished", 
+                    match.winningAmount
+                );
+                socket.emit("game:gameOver", payload);
+                return;
+            }
 
             // Ensure timer is running if it's a running game (idempotent check inside startTimer)
             if (match.state === "RUNNING" && match.currentTurn && match.currentTurn.userId) {
@@ -186,15 +199,40 @@ module.exports = (io, socket) => {
                 socket.leave(`game:${matchId}`);
             }
             else if (result.action === "GAME_ENDED") {
-                // 1v1 Opponent Won
+                const roomName = `game:${matchId}`;
                 if (result.match && result.match.currentTurn) {
                     clearTimer(matchId, result.match.currentTurn.turn);
                 }
 
-                io.to(`game:${matchId}`).emit("game:playerLeft", { userId: socket.user._id, state: "COMPLETED" });
-                const payload = await GameLogic.getGameOverPayload(matchId, result.winnerId, result.reason || "Opponent Left", result.winnerAmount);
-                io.to(`game:${matchId}`).emit("game:gameOver", payload);
-                socket.leave(`game:${matchId}`);
+                // Broadcast populated state so the opponent's UI has names/avatars for the result screen
+                try {
+                    const populatedMatch = await Match.findById(matchId).populate({
+                        path: "players.userId",
+                        select: "_id fullName playerStats avatar"
+                    }).populate({
+                        path: "currentTurn.userId",
+                        select: "_id fullName playerStats avatar"
+                    });
+                    io.to(roomName).emit("game:state", populatedMatch || result.match);
+                } catch (popErr) {
+                    logger.error("Failed to populate match for leave broadcast:", popErr.message);
+                    io.to(roomName).emit("game:state", result.match);
+                }
+
+                io.to(roomName).emit("game:playerLeft", { userId: socket.user._id, state: "COMPLETED" });
+
+                try {
+                    const payload = await GameLogic.getGameOverPayload(matchId, result.winnerId, result.reason || "Opponent Left", result.winnerAmount);
+                    if (payload) {
+                        io.to(roomName).emit("game:gameOver", payload);
+                    } else {
+                        logger.error(`[LeaveMatch] getGameOverPayload returned null for match ${matchId}`);
+                    }
+                } catch (payloadErr) {
+                    logger.error(`[LeaveMatch] Error generating gameOver payload for match ${matchId}:`, payloadErr.message);
+                }
+
+                socket.leave(roomName);
             }
             else if (result.action === "PLAYER_LEFT_GAME") {
                 // 4P etc
@@ -344,7 +382,8 @@ module.exports = (io, socket) => {
                         diceValues: match.currentTurn.diceValues,
                         latestRoll,
                         hasValidMoves: false,
-                        canRollAgain: false
+                        canRollAgain: false,
+                        turnDeadline: match.currentTurn.turnDeadline
                     });
                     await GameLogic.switchTurn(io, match, logger);
                     return;
@@ -356,7 +395,8 @@ module.exports = (io, socket) => {
                     diceValues: match.currentTurn.diceValues,
                     latestRoll,
                     hasValidMoves: true,
-                    canRollAgain: true
+                    canRollAgain: true,
+                    turnDeadline: match.currentTurn.turnDeadline
                 });
                 startTimer(io, matchId, match.currentTurn.turn);
                 return;
@@ -385,12 +425,25 @@ module.exports = (io, socket) => {
                     diceValues: match.currentTurn.diceValues,
                     latestRoll,
                     hasValidMoves: false,
-                    canRollAgain: false
+                    canRollAgain: false,
+                    turnDeadline: match.currentTurn.turnDeadline
                 });
 
                 await GameLogic.switchTurn(io, match, logger);
                 return;
             }
+
+            // --- NEW LOGIC FOR CAPTURE WARNING ---
+            // This assumes a new helper function in GameLogic that checks for capture possibilities.
+            let captureWarning = null;
+            try {
+                if (GameLogic.isCapturePossible(match, player, unusedIndices)) {
+                    captureWarning = "A capture is possible. Move with caution!";
+                }
+            } catch (e) {
+                logger.error("Error checking for capture warning:", e);
+            }
+            // --- END NEW LOGIC ---
 
             await match.save();
             io.to(roomName).emit("game:diceRolled", {
@@ -398,7 +451,9 @@ module.exports = (io, socket) => {
                 diceValues: match.currentTurn.diceValues,
                 latestRoll,
                 hasValidMoves: true,
-                canRollAgain: false
+                canRollAgain: false,
+                captureWarning,
+                turnDeadline: match.currentTurn.turnDeadline
             });
             startTimer(io, matchId, match.currentTurn.turn);
 
@@ -484,7 +539,8 @@ module.exports = (io, socket) => {
                         userId: socket.user._id,
                         message: "Please use remaining dice",
                         extraTurn: false,
-                        reason: 'continue_move'
+                        reason: 'continue_move',
+                        turnDeadline: match.currentTurn.turnDeadline
                     });
                     startTimer(io, matchId, match.currentTurn.turn);
                     return;
@@ -510,7 +566,8 @@ module.exports = (io, socket) => {
                     userId: socket.user._id,
                     message: messages[reason] || messages.bonus,
                     extraTurn: true,
-                    reason
+                    reason,
+                    turnDeadline: match.currentTurn.turnDeadline
                 });
                 startTimer(io, matchId, match.currentTurn.turn);
                 return;
@@ -552,6 +609,9 @@ module.exports = (io, socket) => {
                         await currentMatch.save();
 
                         io.to(`game:${match._id}`).emit("game:playerDisconnected", { userId, message: "Player disconnected. 2 minutes to rejoin." });
+
+                        // --- SERVER-SIDE 2 MINUTE TIMEOUT ---
+                        // Note: Handled by game.cron.js now to ensure persistence and avoid race conditions.
 
                         if (currentMatch.currentTurn.userId.toString() === userId) {
                             clearTimer(currentMatch._id, currentMatch.currentTurn.turn);
