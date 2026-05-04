@@ -19,15 +19,45 @@ class GameLogic {
     /**
      * Roll 2 dice
      */
-    rollDice() {
-        // if (this.isFirstRoll) {
-        //     this.isFirstRoll = false;
-        //     return [6, 6];
-        // }
-        return [
-            Math.floor(Math.random() * 6) + 1,
-            Math.floor(Math.random() * 6) + 1
-        ];
+    rollDice(count = 2) {
+        const rolls = [];
+        for (let i = 0; i < count; i++) {
+            rolls.push(Math.floor(Math.random() * 6) + 1);
+        }
+        return rolls;
+    }
+
+    /**
+     * Determine how many dice a player should roll
+     */
+    getDiceCount(player) {
+        if (!player || !player.tokens) return 2;
+
+        const finishedTokens = player.tokens.filter(t => t.isFinished);
+        const activeTokens = player.tokens.filter(t => !t.isFinished);
+
+        // Rule: Only one dice if only 1 token left, it's in home path, and rest finished
+        if (finishedTokens.length === 3 && activeTokens.length === 1) {
+            const lastToken = activeTokens[0];
+            if (lastToken.position >= 52 && lastToken.position <= 57) {
+                return 1;
+            }
+        }
+        return 2;
+    }
+
+    /**
+     * Check if player's captured status should be reset
+     */
+    checkAndResetCaptured(player) {
+        if (!player || !player.tokens) return;
+
+        // Set false if all 4 tokens are back to home
+        // (Note: This automatically handles the "if any finished" rule because finished tokens are not at position -1)
+        const allAtHome = player.tokens.every(t => t.position === this.STATE_HOME);
+        if (allAtHome) {
+            player.hasCaptured = false;
+        }
     }
 
     /**
@@ -236,6 +266,7 @@ class GameLogic {
             const groundedToken = player.tokens.find(t => t.tokenId === missedTokenId);
             if (groundedToken) {
                 groundedToken.position = -1;
+                this.checkAndResetCaptured(player);
             }
         }
 
@@ -284,6 +315,7 @@ class GameLogic {
                                 // Capture Single
                                 const capturedToken = enemyTokensAtPos[0];
                                 capturedToken.position = -1;
+                                this.checkAndResetCaptured(otherPlayer);
                                 captured = { tokenId: capturedToken.tokenId, color: otherPlayer.color };
                                 bonusTurn = true;
                                 bonusReason = 'capture';

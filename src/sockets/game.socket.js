@@ -355,7 +355,11 @@ module.exports = (io, socket) => {
 
             clearTimer(matchId, match.currentTurn.turn);
 
-            const latestRoll = GameLogic.rollDice();
+            const player = match.players.find(
+                p => p.userId.toString() === socket.user._id.toString()
+            );
+            const diceCount = GameLogic.getDiceCount(player);
+            const latestRoll = GameLogic.rollDice(diceCount);
 
             const unusedDice = (match.currentTurn.diceValues || [])
                 .filter((_, index) => !match.currentTurn.usedDiceIndices.includes(index));
