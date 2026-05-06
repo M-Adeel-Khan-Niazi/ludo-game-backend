@@ -46,19 +46,7 @@ class GameLogic {
         return 2;
     }
 
-    /**
-     * Check if player's captured status should be reset
-     */
-    checkAndResetCaptured(player) {
-        if (!player || !player.tokens) return;
-
-        // Set false if all 4 tokens are back to home
-        // (Note: This automatically handles the "if any finished" rule because finished tokens are not at position -1)
-        const allAtHome = player.tokens.every(t => t.position === this.STATE_HOME);
-        if (allAtHome) {
-            player.hasCaptured = false;
-        }
-    }
+    
 
     /**
      * Get the next turn color
@@ -266,7 +254,9 @@ class GameLogic {
             const groundedToken = player.tokens.find(t => t.tokenId === missedTokenId);
             if (groundedToken) {
                 groundedToken.position = -1;
-                this.checkAndResetCaptured(player);
+                if (!player.tokens.some(t => t.isFinished) && player.tokens.every(t => t.position === -1)) {
+                    player.hasCaptured = false;
+                }
             }
         }
 
@@ -315,11 +305,13 @@ class GameLogic {
                                 // Capture Single
                                 const capturedToken = enemyTokensAtPos[0];
                                 capturedToken.position = -1;
-                                this.checkAndResetCaptured(otherPlayer);
                                 captured = { tokenId: capturedToken.tokenId, color: otherPlayer.color };
                                 bonusTurn = true;
                                 bonusReason = 'capture';
                                 player.hasCaptured = true;
+                                if (!otherPlayer.tokens.some(t => t.isFinished) && otherPlayer.tokens.every(t => t.position === -1)) {
+                                    otherPlayer.hasCaptured = false;
+                                }
                             }
                         }
                     }

@@ -408,9 +408,6 @@ module.exports = (io, socket) => {
 
             match.currentTurn.rollingPhase = false;
 
-            const player = match.players.find(
-                p => p.userId.toString() === socket.user._id.toString()
-            );
             const unusedIndices = match.currentTurn.diceValues
                 .map((_, i) => i)
                 .filter(i => !match.currentTurn.usedDiceIndices.includes(i));
@@ -509,7 +506,16 @@ module.exports = (io, socket) => {
                 newPosition: match.players.find(p => p.userId.toString() === socket.user._id.toString())
                     .tokens.find(t => t.tokenId === tokenId).position,
                 captured: result.captured,
-                finished: result.finished
+                finished: result.finished,
+                players: match.players.map(p => ({
+                    userId: p.userId,
+                    hasCaptured: p.hasCaptured,
+                    tokens: p.tokens.map(t => ({
+                        tokenId: t.tokenId,
+                        position: t.position,
+                        isFinished: t.isFinished
+                    }))
+                }))
             });
 
             if (result.winnerId) {
