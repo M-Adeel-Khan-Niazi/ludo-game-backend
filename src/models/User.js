@@ -14,7 +14,7 @@ const userSchema = new Schema(
       coordinates: { type: [Number], default: [0, 0], index: "2dsphere" },
     },
     wallet: {
-      coins: { type: Number, default: 0 },
+      coins: { type: Number, default: 50 },
       lockedCoins: { type: Number, default: 0 } // during matches
     },
     playerStats: {
