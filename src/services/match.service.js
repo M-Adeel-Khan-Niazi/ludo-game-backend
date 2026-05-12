@@ -103,7 +103,7 @@ class MatchService {
             userId,
             color: nextColor, 
             status: "ACTIVE",
-            team: match.gameType === "2V2" ? (match.players.length % 2) + 1 : null,
+            team: match.gameType === "2V2" ? (match.players.length < 2 ? 1 : 2) : null,
             isHost: false,
             tokens: [
                 { tokenId: `${nextColor[0].toUpperCase()}1`, position: -1, isFinished: false },
