@@ -1,11 +1,51 @@
 const mongoose = require("mongoose");
 const Match = require("../models/Match");
+const User = require("../models/User");
 const WalletService = require("./wallet.service"); // Using the file provided by user mapping
 
 // Helper to generate 6-digit room code
 const generateRoomCode = () => Math.floor(100000 + Math.random() * 900000).toString();
 
 class MatchService {
+
+    _playerId(userId) {
+        return userId?._id ? userId._id.toString() : userId.toString();
+    }
+
+    /**
+     * Resolve which win counter to increment for a completed match.
+     */
+    _getWinStatField(match) {
+        const gameType = (match.gameType || "").toUpperCase();
+        if (gameType === "1V1") return "playerStats.games2PWon";
+        if (gameType === "2V2" || gameType === "4P") return "playerStats.games4PWon";
+        const playerCount = match.maxPlayers || match.players.length;
+        return playerCount > 2 ? "playerStats.games4PWon" : "playerStats.games2PWon";
+    }
+
+    /**
+     * Increment gamesPlayed / win counters after a match completes.
+     */
+    async _updatePlayerStatsOnGameEnd(match, winnerId, paidUserIds = new Set()) {
+        const winField = this._getWinStatField(match);
+        const gameType = (match.gameType || "").toUpperCase();
+        const paid = paidUserIds instanceof Set ? paidUserIds : new Set(paidUserIds);
+
+        for (const p of match.players) {
+            await User.findByIdAndUpdate(this._playerId(p.userId), {
+                $inc: { "playerStats.gamesPlayed": 1 },
+            });
+        }
+
+        if (gameType === "2V2") {
+            for (const userId of paid) {
+                await User.findByIdAndUpdate(userId, { $inc: { [winField]: 1 } });
+            }
+            return;
+        }
+
+        await User.findByIdAndUpdate(this._playerId(winnerId), { $inc: { [winField]: 1 } });
+    }
 
     /**
      * Create a new match (Private or Public)
@@ -220,10 +260,13 @@ class MatchService {
                     match.state = "COMPLETED";
 
                     player.status = "LEFT";
-                    // Also update opponent status?
-                    // opponent.status = "WON"; // No WON status in enum, keep ACTIVE or update schema
 
                     await match.save();
+                    await this._updatePlayerStatsOnGameEnd(
+                        match,
+                        opponent.userId,
+                        new Set([this._playerId(opponent.userId)])
+                    );
                     return { action: "GAME_ENDED", winnerId: opponent.userId, winnerAmount: prize, match };
                 }
             }
@@ -338,6 +381,8 @@ class MatchService {
         match.state = "COMPLETED";
 
         await match.save();
+
+        await this._updatePlayerStatsOnGameEnd(match, winnerId, paidUserIds);
 
         // If this is a tournament match, notify tournament service
         if (match.tournamentId) {

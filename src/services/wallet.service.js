@@ -40,6 +40,7 @@ class WalletService {
             // Deduct from main balance, add to locked
             user.wallet.coins -= amount;
             user.wallet.lockedCoins += amount;
+            user.playerStats.totalCoinsSpent = (user.playerStats?.totalCoinsSpent || 0) + amount;
             await user.save({ session });
 
             // Create transaction record
@@ -81,6 +82,10 @@ class WalletService {
             // Reverse operation
             user.wallet.lockedCoins -= amount;
             user.wallet.coins += amount;
+            user.playerStats.totalCoinsSpent = Math.max(
+                0,
+                (user.playerStats?.totalCoinsSpent || 0) - amount
+            );
             await user.save({ session });
 
             await WalletTransaction.create(
@@ -131,6 +136,8 @@ class WalletService {
 
             // 2. Add winnings
             user.wallet.coins += winningAmount;
+            const netEarned = Math.max(0, winningAmount - lockedAmount);
+            user.playerStats.totalCoinsEarned = (user.playerStats?.totalCoinsEarned || 0) + netEarned;
             await user.save({ session });
 
             await WalletTransaction.create(
