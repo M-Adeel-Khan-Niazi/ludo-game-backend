@@ -506,6 +506,7 @@ module.exports = (io, socket) => {
                 newPosition: match.players.find(p => p.userId.toString() === socket.user._id.toString())
                     .tokens.find(t => t.tokenId === tokenId).position,
                 captured: result.captured,
+                captures: result.captures || (result.captured ? [result.captured] : []),
                 finished: result.finished,
                 players: match.players.map(p => ({
                     userId: p.userId,

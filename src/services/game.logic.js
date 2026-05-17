@@ -108,16 +108,138 @@ class GameLogic {
     isDouble(match, globalPos, excludeColor) {
         for (const p of match.players) {
             if (p.color === excludeColor) continue;
-
-            const tokensAtPos = p.tokens.filter(t => {
-                if (t.position === -1 || t.isFinished || t.position > 51) return false;
-                const gPos = this.toGlobalPosition(p.color, t.position);
-                return gPos === globalPos;
-            });
-
-            if (tokensAtPos.length >= 2) return true;
+            if (this.countTokensAtGlobal(match, globalPos, p.color) >= 2) return true;
         }
         return false;
+    }
+
+    /**
+     * Group main-path tokens at a global cell by player color.
+     */
+    getTokensByColorAtGlobal(match, globalPos) {
+        const byColor = {};
+        for (const p of match.players) {
+            for (const t of p.tokens) {
+                if (t.position === -1 || t.isFinished || t.position > 51) continue;
+                if (this.toGlobalPosition(p.color, t.position) !== globalPos) continue;
+                if (!byColor[p.color]) byColor[p.color] = { player: p, tokens: [] };
+                byColor[p.color].tokens.push(t);
+            }
+        }
+        return byColor;
+    }
+
+    countTokensAtGlobal(match, globalPos, color) {
+        const entry = this.getTokensByColorAtGlobal(match, globalPos)[color];
+        return entry ? entry.tokens.length : 0;
+    }
+
+    /**
+     * Capture matrix: double beats single/double; single only beats single.
+     */
+    canCaptureAtCell(moverCount, enemyCount) {
+        if (enemyCount === 0) return false;
+        if (moverCount >= 2) return true;
+        if (moverCount === 1 && enemyCount === 1) return true;
+        return false;
+    }
+
+    _resetPlayerHasCapturedIfAllHome(player) {
+        if (!player.tokens.some(t => t.isFinished) && player.tokens.every(t => t.position === -1)) {
+            player.hasCaptured = false;
+        }
+    }
+
+    _applyTokenCaptures(tokens, victimPlayer, captures) {
+        for (const t of tokens) {
+            t.position = -1;
+            captures.push({
+                tokenId: t.tokenId,
+                color: victimPlayer.color,
+            });
+        }
+        this._resetPlayerHasCapturedIfAllHome(victimPlayer);
+    }
+
+    /**
+     * Resolve captures when a mover lands on a cell (or preview via hypothetical counts).
+     */
+    resolveLandingCaptures(match, globalPos, attackerColor, { grantBonus = true } = {}) {
+        if (globalPos === null || this.SAFE_ZONES.includes(globalPos)) {
+            return { captures: [], grantBonus: false };
+        }
+
+        const byColor = this.getTokensByColorAtGlobal(match, globalPos);
+        const moverCount = byColor[attackerColor]?.tokens.length || 0;
+        const captures = [];
+        let bonusEligible = false;
+
+        const attackerPlayer = match.players.find(p => p.color === attackerColor);
+        if (!attackerPlayer || moverCount === 0) {
+            return { captures, grantBonus: false };
+        }
+
+        for (const p of match.players) {
+            if (p.color === attackerColor) continue;
+            const enemyTokens = byColor[p.color]?.tokens || [];
+            if (!this.canCaptureAtCell(moverCount, enemyTokens.length)) continue;
+
+            this._applyTokenCaptures(enemyTokens, p, captures);
+            attackerPlayer.hasCaptured = true;
+            bonusEligible = grantBonus;
+        }
+
+        return { captures, grantBonus: bonusEligible };
+    }
+
+    /**
+     * When a double splits by moving one token away, resolve co-occupancy on the source cell.
+     */
+    resolveDepartureCaptures(match, globalPos, departingColor, beforeCounts) {
+        if (globalPos === null || this.SAFE_ZONES.includes(globalPos)) {
+            return { captures: [], grantBonus: false };
+        }
+
+        const beforeDeparting = beforeCounts[departingColor] || 0;
+        if (beforeDeparting < 2) {
+            return { captures: [], grantBonus: false };
+        }
+
+        const byColor = this.getTokensByColorAtGlobal(match, globalPos);
+        const afterDeparting = byColor[departingColor]?.tokens.length || 0;
+        if (afterDeparting === 0 || afterDeparting >= beforeDeparting) {
+            return { captures: [], grantBonus: false };
+        }
+
+        const departingEntry = byColor[departingColor];
+        const departingTokens = departingEntry?.tokens || [];
+        const captures = [];
+
+        for (const p of match.players) {
+            if (p.color === departingColor) continue;
+            const otherTokens = byColor[p.color]?.tokens || [];
+            if (otherTokens.length === 0) continue;
+
+            if (afterDeparting === 1 && otherTokens.length === 1) {
+                this._applyTokenCaptures(departingTokens, departingEntry.player, captures);
+                p.hasCaptured = true;
+                break;
+            }
+        }
+
+        return { captures, grantBonus: false };
+    }
+
+    /**
+     * Hypothetical mover count at globalDest after moving token there.
+     */
+    getHypotheticalMoverCountAtGlobal(match, player, token, globalDest) {
+        const tokenGlobal = this.toGlobalPosition(player.color, token.position);
+        let count = this.countTokensAtGlobal(match, globalDest, player.color);
+        if (tokenGlobal === globalDest) {
+            return count;
+        }
+        return count + 1;
     }
 
     isValidMove(token, diceValue, player, match) {
@@ -161,25 +283,18 @@ class GameLogic {
             return false; // Safe exit
         }
 
-        let potentialPos = this.getNextPosition(token, diceValue, player.hasCaptured);
+        const potentialPos = this.getNextPosition(token, diceValue, player.hasCaptured);
         if (potentialPos > 51) return false; // In safe zone/home path
 
         const globalDest = this.toGlobalPosition(player.color, potentialPos);
-        if (this.SAFE_ZONES.includes(globalDest)) return false;
+        if (globalDest === null || this.SAFE_ZONES.includes(globalDest)) return false;
 
-        // Check for enemies
+        const moverCount = this.getHypotheticalMoverCountAtGlobal(match, player, token, globalDest);
+
         for (const p of match.players) {
             if (p.userId.toString() === player.userId.toString()) continue;
-
-            // Check doubles logic here:
-            // If enemy has double at destination -> NO Capture.
-            if (this.isDouble(match, globalDest, player.color)) return false;
-
-            for (const t of p.tokens) {
-                if (t.position === -1 || t.isFinished || t.position > 51) continue;
-                const gPos = this.toGlobalPosition(p.color, t.position);
-                if (gPos === globalDest) return true;
-            }
+            const enemyCount = this.countTokensAtGlobal(match, globalDest, p.color);
+            if (this.canCaptureAtCell(moverCount, enemyCount)) return true;
         }
         return false;
     }
@@ -260,7 +375,21 @@ class GameLogic {
             }
         }
 
+        // Source cell before move (for split-double resolution)
+        let fromGlobalPos = null;
+        let beforeCounts = null;
+        if (!wasHome && token.position <= 51) {
+            fromGlobalPos = this.toGlobalPosition(player.color, token.position);
+            if (fromGlobalPos !== null && !this.SAFE_ZONES.includes(fromGlobalPos)) {
+                beforeCounts = {};
+                for (const p of match.players) {
+                    beforeCounts[p.color] = this.countTokensAtGlobal(match, fromGlobalPos, p.color);
+                }
+            }
+        }
+
         // Execute Move
+        let captures = [];
         let captured = null;
         let finished = false;
         let bonusTurn = false;
@@ -279,48 +408,33 @@ class GameLogic {
             bonusReason = 'home';
         }
 
-        // Check Capture
-        if (!finished && token.position <= 51) {
-            if (!wasHome) {
-                const globalPos = this.toGlobalPosition(player.color, token.position);
-                if (globalPos !== null && !this.SAFE_ZONES.includes(globalPos)) {
-                    // Check enemies
-                    for (const otherPlayer of match.players) {
-                        if (otherPlayer.userId.toString() === userId.toString()) continue;
-
-                        let enemyTokensAtPos = [];
-                        for (const ot of otherPlayer.tokens) {
-                            if (ot.position !== -1 && !ot.isFinished && ot.position <= 51) {
-                                if (this.toGlobalPosition(otherPlayer.color, ot.position) === globalPos) {
-                                    enemyTokensAtPos.push(ot);
-                                }
-                            }
-                        }
-
-                        if (enemyTokensAtPos.length > 0) {
-                            // Rule 3: Double vs Single.
-                            if (enemyTokensAtPos.length >= 2) {
-                                // Double -> Safe. No capture.
-                            } else {
-                                // Capture Single
-                                const capturedToken = enemyTokensAtPos[0];
-                                capturedToken.position = -1;
-                                captured = { tokenId: capturedToken.tokenId, color: otherPlayer.color };
-                                bonusTurn = true;
-                                bonusReason = 'capture';
-                                player.hasCaptured = true;
-                                if (!otherPlayer.tokens.some(t => t.isFinished) && otherPlayer.tokens.every(t => t.position === -1)) {
-                                    otherPlayer.hasCaptured = false;
-                                }
-                            }
-                        }
-                    }
+        // Landing capture
+        if (!finished && token.position <= 51 && !wasHome) {
+            const globalPos = this.toGlobalPosition(player.color, token.position);
+            const landingResult = this.resolveLandingCaptures(match, globalPos, player.color, { grantBonus: true });
+            if (landingResult.captures.length > 0) {
+                captures = captures.concat(landingResult.captures);
+                captured = landingResult.captures[0];
+                if (landingResult.grantBonus) {
+                    bonusTurn = true;
+                    bonusReason = 'capture';
+                    match.currentTurn.pendingBonus = true;
                 }
             }
         }
 
-        if (captured || finished) {
+        // Source-cell capture when a double splits (no bonus turn)
+        if (fromGlobalPos !== null && beforeCounts) {
+            const departureResult = this.resolveDepartureCaptures(match, fromGlobalPos, player.color, beforeCounts);
+            if (departureResult.captures.length > 0) {
+                captures = captures.concat(departureResult.captures);
+                if (!captured) captured = departureResult.captures[0];
+            }
+        }
+
+        if (finished) {
             bonusTurn = true;
+            bonusReason = 'home';
             match.currentTurn.pendingBonus = true;
         }
 
@@ -335,6 +449,7 @@ class GameLogic {
 
         return {
             captured,
+            captures,
             finished,
             bonusTurn,
             bonusReason,
