@@ -3,7 +3,14 @@ const { GameLogic } = require("../services/game.logic");
 const logger = require("../config/logger");
 const MatchService = require("../services/match.service");
 const { getMatchLock } = require("../utils/lock");
-const { startTimer, clearTimer } = require("../services/timer.service");
+const { startTimer, clearTimer, getTurnTimerPayload, emitTurnTimerSync } = require("../services/timer.service");
+
+function restorePlayerConnection(match, player) {
+    const wasDisconnected = player.status === "DISCONNECTED";
+    player.status = "ACTIVE";
+    player.disconnectedAt = null;
+    return wasDisconnected;
+}
 
 module.exports = (io, socket) => {
 
@@ -22,9 +29,7 @@ module.exports = (io, socket) => {
             const player = match.players.find(p => p.userId._id.toString() === socket.user._id.toString());
             if (!player) return socket.emit("error", { message: "You are not in this match" });
 
-            // Note: need to save state
-            player.status = "ACTIVE";
-            player.disconnectedAt = null;
+            const wasDisconnected = restorePlayerConnection(match, player);
             await match.save();
 
             const roomName = `game:${matchId}`;
@@ -33,17 +38,29 @@ module.exports = (io, socket) => {
             }
 
             socket.emit("game:state", match);
-            socket.to(roomName).emit("game:playerJoined", {
-                userId: socket.user._id,
-                avatar: socket.user.avatar,
-                fullName: socket.user.fullName
-            });
+            if (wasDisconnected) {
+                io.to(roomName).emit("game:playerReconnected", {
+                    userId: socket.user._id,
+                    avatar: socket.user.avatar,
+                    fullName: socket.user.fullName,
+                });
+            } else {
+                socket.to(roomName).emit("game:playerJoined", {
+                    userId: socket.user._id,
+                    avatar: socket.user.avatar,
+                    fullName: socket.user.fullName,
+                });
+            }
 
-            // Broadcast updated state to everyone in the room so UI stays perfectly in sync (WAITING or RUNNING)
             io.to(roomName).emit("game:state", match);
-            
-            if (match.state === "RUNNING" && match.currentTurn && match.currentTurn.userId) {
+
+            if (match.state === "RUNNING" && match.currentTurn?.userId) {
                 startTimer(io, matchId, match.currentTurn.turn);
+                const isYourTurn =
+                    match.currentTurn.userId._id?.toString() === socket.user._id.toString() ||
+                    match.currentTurn.userId.toString() === socket.user._id.toString();
+                emitTurnTimerSync(io, socket, match, { isYourTurn });
+                emitTurnTimerSync(io, roomName, match);
             }
 
             logger.info(`User ${socket.user._id} joined game ${matchId}`);
@@ -75,14 +92,16 @@ module.exports = (io, socket) => {
                 socket.join(roomName);
             }
 
-            // Update status if they were disconnected (Silent update)
-            if (player.status === "DISCONNECTED" && match.state === "RUNNING") {
-                player.status = "ACTIVE";
-                player.disconnectedAt = null;
+            const wasDisconnected =
+                player.status === "DISCONNECTED" && match.state === "RUNNING";
+            if (wasDisconnected) {
+                restorePlayerConnection(match, player);
                 await match.save();
+                io.to(roomName).emit("game:playerReconnected", {
+                    userId: socket.user._id,
+                });
             }
 
-            // Emit state ONLY to the requester
             socket.emit("game:state", match);
 
             // --- CATCH MISSED GAME OVER ---
@@ -98,9 +117,12 @@ module.exports = (io, socket) => {
                 return;
             }
 
-            // Ensure timer is running if it's a running game (idempotent check inside startTimer)
-            if (match.state === "RUNNING" && match.currentTurn && match.currentTurn.userId) {
+            if (match.state === "RUNNING" && match.currentTurn?.userId) {
                 startTimer(io, matchId, match.currentTurn.turn);
+                const isYourTurn =
+                    match.currentTurn.userId._id?.toString() === socket.user._id.toString() ||
+                    match.currentTurn.userId.toString() === socket.user._id.toString();
+                emitTurnTimerSync(io, socket, match, { isYourTurn });
             }
 
         } catch (err) {
@@ -621,15 +643,23 @@ module.exports = (io, socket) => {
                         player.disconnectedAt = new Date();
                         await currentMatch.save();
 
-                        io.to(`game:${match._id}`).emit("game:playerDisconnected", { userId, message: "Player disconnected. 2 minutes to rejoin." });
+                        const roomName = `game:${currentMatch._id}`;
+                        const isCurrentTurn =
+                            currentMatch.currentTurn?.userId?.toString() === userId;
+                        const turnTimer = getTurnTimerPayload(currentMatch);
 
-                        // --- SERVER-SIDE 2 MINUTE TIMEOUT ---
-                        // Note: Handled by game.cron.js now to ensure persistence and avoid race conditions.
+                        io.to(roomName).emit("game:playerDisconnected", {
+                            userId,
+                            message: isCurrentTurn
+                                ? "Player disconnected. Turn timer still running — rejoin before it expires."
+                                : "Player disconnected. 2 minutes to rejoin.",
+                            isCurrentTurn,
+                            turnTimer,
+                        });
 
-                        if (currentMatch.currentTurn.userId.toString() === userId) {
-                            clearTimer(currentMatch._id, currentMatch.currentTurn.turn);
-                            await GameLogic.switchTurn(io, currentMatch, logger);
-                        }
+                        // Do NOT clear the turn timer or switch turn on brief disconnect.
+                        // Turn expiry is handled by timer.service + game.cron via turnDeadline.
+                        // Long absence is handled by game.cron.js (2 min disconnect disqualification).
                     }
                 } finally { release(); }
             }

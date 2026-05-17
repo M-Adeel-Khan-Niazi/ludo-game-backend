@@ -1,5 +1,44 @@
 const timers = new Map();
 
+/**
+ * Build timer payload for client sync (uses persisted turnDeadline).
+ */
+function getTurnTimerPayload(match) {
+    if (!match?.currentTurn?.turnDeadline) return null;
+
+    const turnDeadline = new Date(match.currentTurn.turnDeadline);
+    const serverTime = new Date();
+
+    return {
+        turn: match.currentTurn.turn,
+        turnDeadline: turnDeadline.toISOString(),
+        remainingMs: Math.max(0, turnDeadline.getTime() - serverTime.getTime()),
+        serverTime: serverTime.toISOString(),
+        rollingPhase: match.currentTurn.rollingPhase ?? true,
+        currentTurnUserId: match.currentTurn.userId?.toString?.() || String(match.currentTurn.userId),
+    };
+}
+
+function emitTurnTimerSync(io, target, match, { isYourTurn = null } = {}) {
+    const payload = getTurnTimerPayload(match);
+    if (!payload) return;
+
+    const event = {
+        matchId: match._id.toString(),
+        ...payload,
+        ...(isYourTurn !== null ? { isYourTurn } : {}),
+    };
+
+    if (typeof target === "string") {
+        io.to(target).emit("game:turnTimerSync", event);
+    } else if (target?.emit) {
+        target.emit("game:turnTimerSync", {
+            ...event,
+            isYourTurn: isYourTurn ?? undefined,
+        });
+    }
+}
+
 function startTimer(io, matchIdRaw, turn) {
     const matchId = matchIdRaw.toString();
     const key = `${matchId}-${turn}`;
@@ -91,5 +130,7 @@ function clearTimer(matchId, turn) {
 
 module.exports = {
     startTimer,
-    clearTimer
+    clearTimer,
+    getTurnTimerPayload,
+    emitTurnTimerSync,
 };

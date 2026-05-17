@@ -550,7 +550,7 @@ class GameLogic {
     }
     
     async switchTurn(io, match, logger) {
-        const { startTimer, clearTimer } = require('../services/timer.service');
+        const { startTimer, clearTimer, emitTurnTimerSync } = require('../services/timer.service');
 
         if (match.state !== "RUNNING") {
             logger.warn(`[GameLogic] switchTurn skipped. Match ${match._id} is ${match.state}`);
@@ -591,6 +591,7 @@ class GameLogic {
         io.to(roomName).emit("game:turnChanged", populatedMatch.currentTurn);
 
         startTimer(io, match._id, populatedMatch.currentTurn.turn);
+        emitTurnTimerSync(io, roomName, match);
 
         return populatedMatch.currentTurn;
     }
