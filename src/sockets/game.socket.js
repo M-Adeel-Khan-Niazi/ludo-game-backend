@@ -412,12 +412,7 @@ module.exports = (io, socket) => {
                 .map((_, i) => i)
                 .filter(i => !match.currentTurn.usedDiceIndices.includes(i));
 
-            let hasValidMoves = false;
-            unusedIndices.forEach(idx => {
-                const val = match.currentTurn.diceValues[idx];
-                if (player.tokens.some(t => GameLogic.isValidMove(t, val, player, match)))
-                    hasValidMoves = true;
-            });
+            const hasValidMoves = GameLogic.hasAnyValidMove(match, player);
 
             if (!hasValidMoves) {
                 await match.save();
@@ -434,17 +429,15 @@ module.exports = (io, socket) => {
                 return;
             }
 
-            // --- NEW LOGIC FOR CAPTURE WARNING ---
-            // This assumes a new helper function in GameLogic that checks for capture possibilities.
             let captureWarning = null;
+            let capturePossible = { firstDie: false, secondDie: false, combined: false };
             try {
-                if (GameLogic.isCapturePossible(match, player, unusedIndices)) {
-                    captureWarning = "A capture is possible. Move with caution!";
-                }
+                const warningInfo = GameLogic.getCaptureWarning(match, player);
+                captureWarning = warningInfo.captureWarning;
+                capturePossible = warningInfo.capturePossible;
             } catch (e) {
                 logger.error("Error checking for capture warning:", e);
             }
-            // --- END NEW LOGIC ---
 
             await match.save();
             io.to(roomName).emit("game:diceRolled", {
@@ -454,6 +447,7 @@ module.exports = (io, socket) => {
                 hasValidMoves: true,
                 canRollAgain: false,
                 captureWarning,
+                capturePossible,
                 turnDeadline: match.currentTurn.turnDeadline
             });
             startTimer(io, matchId, match.currentTurn.turn);
@@ -536,21 +530,29 @@ module.exports = (io, socket) => {
                 const player = match.players.find(
                     p => p.userId.toString() === socket.user._id.toString()
                 );
-                const remainingHasMoves = unusedIndices.some(idx => {
-                    const val = match.currentTurn.diceValues[idx];
-                    return player.tokens.some(t =>
-                        GameLogic.isValidMove(t, val, player, match)
-                    );
-                });
+                const remainingHasMoves = GameLogic.hasAnyValidMove(match, player);
 
                 if (remainingHasMoves) {
                     match.currentTurn.turnDeadline = new Date(Date.now() + 15000);
                     await match.save();
+
+                    let captureWarning = null;
+                    let capturePossible = { firstDie: false, secondDie: false, combined: false };
+                    try {
+                        const warningInfo = GameLogic.getCaptureWarning(match, player);
+                        captureWarning = warningInfo.captureWarning;
+                        capturePossible = warningInfo.capturePossible;
+                    } catch (e) {
+                        logger.error("Error checking capture warning on turnContinued:", e);
+                    }
+
                     io.to(roomName).emit("game:turnContinued", {
                         userId: socket.user._id,
                         message: "Please use remaining dice",
                         extraTurn: false,
                         reason: 'continue_move',
+                        captureWarning,
+                        capturePossible,
                         turnDeadline: match.currentTurn.turnDeadline
                     });
                     startTimer(io, matchId, match.currentTurn.turn);

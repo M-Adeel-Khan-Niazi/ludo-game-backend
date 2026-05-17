@@ -9,6 +9,9 @@ class GameLogic {
         this.STATE_HOME = -1; // In base
         this.STATE_FINISHED = 999; // Reached end
 
+        /** Use with moveToken when spending both unused dice as one combined move */
+        this.COMBINED_DICE_INDEX = -1;
+
         // Safe Zones (Global Indices on main path)
         this.SAFE_ZONES = [0, 8, 13, 21, 26, 34, 39, 47];
 
@@ -299,23 +302,90 @@ class GameLogic {
         return false;
     }
 
+    getUnusedDiceIndices(match) {
+        if (!match?.currentTurn?.diceValues) return [];
+        return match.currentTurn.diceValues
+            .map((_, i) => i)
+            .filter((i) => !match.currentTurn.usedDiceIndices.includes(i));
+    }
+
+    getCombinedDiceValue(match, unusedIndices) {
+        if (!unusedIndices || unusedIndices.length < 2) return null;
+        return unusedIndices.reduce(
+            (sum, idx) => sum + match.currentTurn.diceValues[idx],
+            0
+        );
+    }
+
+    canCaptureWithDiceValue(match, player, diceValue) {
+        if (!match || !player || diceValue == null) return false;
+        for (const token of player.tokens) {
+            if (token.isFinished) continue;
+            if (this.isValidMove(token, diceValue, player, match)) {
+                if (this.checkCapture(match, player, token, diceValue)) return true;
+            }
+        }
+        return false;
+    }
+
     /**
-     * Check if the current player can capture any opponent token with the available unused dice.
+     * Capture warning across: first die, second die, and combined sum (when 2+ dice unused).
      */
-    isCapturePossible(match, player, unusedIndices) {
-        if (!match || !player || !unusedIndices || !match.currentTurn || !match.currentTurn.diceValues) {
-            return false;
+    getCaptureWarning(match, player) {
+        const capturePossible = { firstDie: false, secondDie: false, combined: false };
+        const unusedIndices = this.getUnusedDiceIndices(match);
+
+        if (!match || !player || !unusedIndices.length) {
+            return { captureWarning: null, capturePossible };
         }
 
         for (const idx of unusedIndices) {
             const diceValue = match.currentTurn.diceValues[idx];
-            for (const token of player.tokens) {
-                if (token.isFinished) continue;
-                if (this.isValidMove(token, diceValue, player, match)) {
-                    if (this.checkCapture(match, player, token, diceValue)) {
-                        return true;
-                    }
-                }
+            if (!this.canCaptureWithDiceValue(match, player, diceValue)) continue;
+            if (idx === 0) capturePossible.firstDie = true;
+            if (idx === 1) capturePossible.secondDie = true;
+        }
+
+        const combinedValue = this.getCombinedDiceValue(match, unusedIndices);
+        if (combinedValue !== null) {
+            capturePossible.combined = this.canCaptureWithDiceValue(match, player, combinedValue);
+        }
+
+        const anyPossible =
+            capturePossible.firstDie ||
+            capturePossible.secondDie ||
+            capturePossible.combined;
+
+        return {
+            captureWarning: anyPossible
+                ? "A capture is possible. Move with caution!"
+                : null,
+            capturePossible,
+        };
+    }
+
+    /**
+     * Check if the current player can capture any opponent token with the available unused dice.
+     */
+    isCapturePossible(match, player, unusedIndices) {
+        if (!match || !player || !match.currentTurn?.diceValues) return false;
+        const indices = unusedIndices ?? this.getUnusedDiceIndices(match);
+        return this.getCaptureWarning(match, player).captureWarning !== null;
+    }
+
+    hasAnyValidMove(match, player) {
+        const unusedIndices = this.getUnusedDiceIndices(match);
+        if (!unusedIndices.length) return false;
+
+        for (const idx of unusedIndices) {
+            const val = match.currentTurn.diceValues[idx];
+            if (player.tokens.some((t) => this.isValidMove(t, val, player, match))) return true;
+        }
+
+        const combinedValue = this.getCombinedDiceValue(match, unusedIndices);
+        if (combinedValue !== null) {
+            if (player.tokens.some((t) => this.isValidMove(t, combinedValue, player, match))) {
+                return true;
             }
         }
         return false;
@@ -330,9 +400,22 @@ class GameLogic {
         if (!token) throw new Error("Token not found");
         const wasHome = (token.position === this.STATE_HOME);
 
-        if (match.currentTurn.usedDiceIndices.includes(diceIndex)) throw new Error("Dice already used");
+        const unusedIndices = this.getUnusedDiceIndices(match);
+        let diceValue;
+        let indicesToConsume = [diceIndex];
 
-        const diceValue = match.currentTurn.diceValues[diceIndex];
+        if (diceIndex === this.COMBINED_DICE_INDEX) {
+            if (unusedIndices.length < 2) {
+                throw new Error("Combined move requires at least two unused dice");
+            }
+            diceValue = this.getCombinedDiceValue(match, unusedIndices);
+            indicesToConsume = [...unusedIndices];
+        } else {
+            if (match.currentTurn.usedDiceIndices.includes(diceIndex)) {
+                throw new Error("Dice already used");
+            }
+            diceValue = match.currentTurn.diceValues[diceIndex];
+        }
 
         // Explicit Error check to provide meaningful feedback to the player
         const hasUnusedSix = match.currentTurn.diceValues.some((val, idx) => 
@@ -438,11 +521,16 @@ class GameLogic {
             match.currentTurn.pendingBonus = true;
         }
 
-        match.currentTurn.usedDiceIndices.push(diceIndex);
+        for (const idx of indicesToConsume) {
+            if (!match.currentTurn.usedDiceIndices.includes(idx)) {
+                match.currentTurn.usedDiceIndices.push(idx);
+            }
+        }
         match.markModified('currentTurn');
         match.markModified('players');
 
-        const allDiceUsed = match.currentTurn.diceValues.length === match.currentTurn.usedDiceIndices.length;
+        const allDiceUsed =
+            this.getUnusedDiceIndices(match).length === 0;
 
         // Check Win Condition
         const winnerId = this.checkWinCondition(match);
