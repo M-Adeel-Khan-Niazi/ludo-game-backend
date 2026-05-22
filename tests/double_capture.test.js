@@ -152,6 +152,24 @@ async function runTests() {
         assert(canCap, 'checkCapture true when mover will form double on enemy double');
     }
 
+    // 6. Both doubles already on same cell — battle when mover acts from that cell
+    console.log('\n6. Static double vs double battle on source cell');
+    {
+        const red = createPlayer('red');
+        const yellow = createPlayer('yellow');
+        const g = 20;
+        red.tokens[0].position = g;
+        red.tokens[1].position = g;
+        yellow.tokens[0].position = relativeFor('yellow', g);
+        yellow.tokens[1].position = relativeFor('yellow', g);
+        const match = createMatch([red, yellow]);
+        match.currentTurn.diceValues = [3];
+
+        const result = await GameLogic.applyMove(match, red.userId, 'R1', 0);
+        assert(result.captures.length === 2, 'static pile: yellow double captured before move');
+        assert(yellow.tokens[0].position === -1 && yellow.tokens[1].position === -1, 'yellow cleared');
+    }
+
     console.log(`\nResults: ${passed} passed, ${failed} failed`);
     process.exit(failed > 0 ? 1 : 0);
 }

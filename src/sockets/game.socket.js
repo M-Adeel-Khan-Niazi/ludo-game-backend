@@ -501,6 +501,8 @@ module.exports = (io, socket) => {
 
             const result = await GameLogic.applyMove(match, socket.user._id, tokenId, diceIndex);
 
+            await match.save();
+
             clearTimer(matchId, match.currentTurn.turn);
 
             const roomName = `game:${matchId}`;

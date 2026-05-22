@@ -165,6 +165,42 @@ class GameLogic {
     }
 
     /**
+     * When both players have a double (2+ tokens) on the same cell, the active player
+     * captures all opponent tokens on that cell (before moving or on landing).
+     */
+    resolveDoubleVsDoubleBattle(match, globalPos, attackerColor, { grantBonus = false } = {}) {
+        if (globalPos === null || this.SAFE_ZONES.includes(globalPos)) {
+            return { captures: [], grantBonus: false };
+        }
+
+        const byColor = this.getTokensByColorAtGlobal(match, globalPos);
+        const moverCount = byColor[attackerColor]?.tokens.length || 0;
+        if (moverCount < 2) {
+            return { captures: [], grantBonus: false };
+        }
+
+        const captures = [];
+        let bonusEligible = false;
+        const attackerPlayer = match.players.find((p) => p.color === attackerColor);
+        if (!attackerPlayer) {
+            return { captures, grantBonus: false };
+        }
+
+        for (const p of match.players) {
+            if (p.color === attackerColor) continue;
+            const enemyTokens = byColor[p.color]?.tokens || [];
+            if (enemyTokens.length < 2) continue;
+            if (!this.canCaptureAtCell(moverCount, enemyTokens.length)) continue;
+
+            this._applyTokenCaptures(enemyTokens, p, captures);
+            attackerPlayer.hasCaptured = true;
+            bonusEligible = grantBonus;
+        }
+
+        return { captures, grantBonus: bonusEligible };
+    }
+
+    /**
      * Resolve captures when a mover lands on a cell (or preview via hypothetical counts).
      */
     resolveLandingCaptures(match, globalPos, attackerColor, { grantBonus = true } = {}) {
@@ -299,6 +335,19 @@ class GameLogic {
             const enemyCount = this.countTokensAtGlobal(match, globalDest, p.color);
             if (this.canCaptureAtCell(moverCount, enemyCount)) return true;
         }
+
+        // Double vs double already on destination before this token arrives
+        const existingAtDest = this.countTokensAtGlobal(match, globalDest, player.color);
+        if (existingAtDest >= 2) {
+            for (const p of match.players) {
+                if (p.userId.toString() === player.userId.toString()) continue;
+                const enemyCount = this.countTokensAtGlobal(match, globalDest, p.color);
+                if (enemyCount >= 2 && this.canCaptureAtCell(existingAtDest, enemyCount)) {
+                    return true;
+                }
+            }
+        }
+
         return false;
     }
 
@@ -332,7 +381,12 @@ class GameLogic {
      * Capture warning across: first die, second die, and combined sum (when 2+ dice unused).
      */
     getCaptureWarning(match, player) {
-        const capturePossible = { firstDie: false, secondDie: false, combined: false };
+        const capturePossible = {
+            firstDie: false,
+            secondDie: false,
+            combined: false,
+            doubleStack: false,
+        };
         const unusedIndices = this.getUnusedDiceIndices(match);
 
         if (!match || !player || !unusedIndices.length) {
@@ -344,6 +398,24 @@ class GameLogic {
             if (!this.canCaptureWithDiceValue(match, player, diceValue)) continue;
             if (idx === 0) capturePossible.firstDie = true;
             if (idx === 1) capturePossible.secondDie = true;
+            else capturePossible[`die${idx}`] = true;
+        }
+
+        // Existing double vs enemy double on a cell the player occupies
+        for (const t of player.tokens) {
+            if (t.isFinished || t.position > 51 || t.position === this.STATE_HOME) continue;
+            const g = this.toGlobalPosition(player.color, t.position);
+            if (g === null || this.SAFE_ZONES.includes(g)) continue;
+            const ownCount = this.countTokensAtGlobal(match, g, player.color);
+            if (ownCount < 2) continue;
+            for (const p of match.players) {
+                if (p.color === player.color) continue;
+                const enemyCount = this.countTokensAtGlobal(match, g, p.color);
+                if (enemyCount >= 2 && this.canCaptureAtCell(ownCount, enemyCount)) {
+                    capturePossible.doubleStack = true;
+                    break;
+                }
+            }
         }
 
         const combinedValue = this.getCombinedDiceValue(match, unusedIndices);
@@ -354,7 +426,8 @@ class GameLogic {
         const anyPossible =
             capturePossible.firstDie ||
             capturePossible.secondDie ||
-            capturePossible.combined;
+            capturePossible.combined ||
+            capturePossible.doubleStack;
 
         return {
             captureWarning: anyPossible
@@ -471,12 +544,30 @@ class GameLogic {
             }
         }
 
-        // Execute Move
         let captures = [];
         let captured = null;
         let finished = false;
         let bonusTurn = false;
         let bonusReason = null;
+
+        // Double vs double on the token's current cell — resolve before the move
+        if (fromGlobalPos !== null) {
+            const battleResult = this.resolveDoubleVsDoubleBattle(
+                match,
+                fromGlobalPos,
+                player.color,
+                { grantBonus: true }
+            );
+            if (battleResult.captures.length > 0) {
+                captures = captures.concat(battleResult.captures);
+                captured = battleResult.captures[0];
+                if (battleResult.grantBonus) {
+                    bonusTurn = true;
+                    bonusReason = 'capture';
+                    match.currentTurn.pendingBonus = true;
+                }
+            }
+        }
 
         if (token.position === this.STATE_HOME) {
             token.position = 0;
@@ -491,17 +582,21 @@ class GameLogic {
             bonusReason = 'home';
         }
 
-        // Landing capture
-        if (!finished && token.position <= 51 && !wasHome) {
+        // Landing capture (includes forming a double on an enemy stack)
+        if (!finished && token.position <= 51) {
             const globalPos = this.toGlobalPosition(player.color, token.position);
-            const landingResult = this.resolveLandingCaptures(match, globalPos, player.color, { grantBonus: true });
-            if (landingResult.captures.length > 0) {
-                captures = captures.concat(landingResult.captures);
-                captured = landingResult.captures[0];
-                if (landingResult.grantBonus) {
-                    bonusTurn = true;
-                    bonusReason = 'capture';
-                    match.currentTurn.pendingBonus = true;
+            if (globalPos !== null && !this.SAFE_ZONES.includes(globalPos)) {
+                const landingResult = this.resolveLandingCaptures(match, globalPos, player.color, {
+                    grantBonus: true,
+                });
+                if (landingResult.captures.length > 0) {
+                    captures = captures.concat(landingResult.captures);
+                    captured = captured || landingResult.captures[0];
+                    if (landingResult.grantBonus) {
+                        bonusTurn = true;
+                        bonusReason = 'capture';
+                        match.currentTurn.pendingBonus = true;
+                    }
                 }
             }
         }
@@ -511,8 +606,12 @@ class GameLogic {
             const departureResult = this.resolveDepartureCaptures(match, fromGlobalPos, player.color, beforeCounts);
             if (departureResult.captures.length > 0) {
                 captures = captures.concat(departureResult.captures);
-                if (!captured) captured = departureResult.captures[0];
+                captured = captured || departureResult.captures[0];
             }
+        }
+
+        if (captures.length > 0) {
+            match.markModified('players');
         }
 
         if (finished) {
