@@ -158,7 +158,7 @@ module.exports = (io, socket) => {
                 diceValues: [],
                 usedDiceIndices: [],
                 rollCount: 0,
-                pendingBonus: false,
+                pendingBonus: 0,
                 rollingPhase: true,
                 turn: 1,
                 turnDeadline: new Date(Date.now() + 15000)
@@ -584,9 +584,9 @@ module.exports = (io, socket) => {
                 }
             }
 
-            if (match.currentTurn.pendingBonus) {
+            if (match.currentTurn.pendingBonus > 0) {
                 match.currentTurn.rollingPhase = true;
-                match.currentTurn.pendingBonus = false;
+                match.currentTurn.pendingBonus -= 1;
                 match.currentTurn.usedDiceIndices = [];
                 match.currentTurn.diceValues = [];
                 match.currentTurn.turnDeadline = new Date(Date.now() + 15000);

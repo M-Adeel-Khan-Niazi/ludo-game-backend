@@ -175,7 +175,7 @@ class TournamentService {
                 diceValues: [],
                 usedDiceIndices: [],
                 rollCount: 0,
-                pendingBonus: false,
+                pendingBonus: 0,
                 rollingPhase: true,
                 turn: 1,
                 turnDeadline: new Date(Date.now() + 15000)
@@ -298,7 +298,7 @@ class TournamentService {
             diceValues: [],
             usedDiceIndices: [],
             rollCount: 0,
-            pendingBonus: false,
+            pendingBonus: 0,
             rollingPhase: true,
             turn: 1,
             turnDeadline: new Date(Date.now() + 15000)

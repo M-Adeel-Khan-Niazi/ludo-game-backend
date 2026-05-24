@@ -564,7 +564,7 @@ class GameLogic {
                 if (battleResult.grantBonus) {
                     bonusTurn = true;
                     bonusReason = 'capture';
-                    match.currentTurn.pendingBonus = true;
+                    match.currentTurn.pendingBonus = (match.currentTurn.pendingBonus || 0) + 1;
                 }
             }
         }
@@ -595,7 +595,7 @@ class GameLogic {
                     if (landingResult.grantBonus) {
                         bonusTurn = true;
                         bonusReason = 'capture';
-                        match.currentTurn.pendingBonus = true;
+                        match.currentTurn.pendingBonus = (match.currentTurn.pendingBonus || 0) + 1;
                     }
                 }
             }
@@ -617,7 +617,7 @@ class GameLogic {
         if (finished) {
             bonusTurn = true;
             bonusReason = 'home';
-            match.currentTurn.pendingBonus = true;
+            match.currentTurn.pendingBonus = (match.currentTurn.pendingBonus || 0) + 1;
         }
 
         for (const idx of indicesToConsume) {
@@ -673,7 +673,7 @@ class GameLogic {
             diceValues: [],
             usedDiceIndices: [],
             rollCount: 0,
-            pendingBonus: false,
+            pendingBonus: 0,
             rollingPhase: true,
             turn: (currentTurnNumber || 0) + 1,
             turnDeadline: new Date(Date.now() + 15000)
