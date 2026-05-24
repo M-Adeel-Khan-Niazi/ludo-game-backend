@@ -55,7 +55,7 @@ module.exports = (io, socket) => {
             io.to(roomName).emit("game:state", match);
 
             if (match.state === "RUNNING" && match.currentTurn?.userId) {
-                startTimer(io, matchId, match.currentTurn.turn);
+                startTimer(io, match, match.currentTurn.turn);
                 const isYourTurn =
                     match.currentTurn.userId._id?.toString() === socket.user._id.toString() ||
                     match.currentTurn.userId.toString() === socket.user._id.toString();
@@ -118,7 +118,7 @@ module.exports = (io, socket) => {
             }
 
             if (match.state === "RUNNING" && match.currentTurn?.userId) {
-                startTimer(io, matchId, match.currentTurn.turn);
+                startTimer(io, match, match.currentTurn.turn);
                 const isYourTurn =
                     match.currentTurn.userId._id?.toString() === socket.user._id.toString() ||
                     match.currentTurn.userId.toString() === socket.user._id.toString();
@@ -178,7 +178,7 @@ module.exports = (io, socket) => {
             const roomName = `game:${matchId}`;
             io.to(roomName).emit("game:state", populatedMatch);
             
-            startTimer(io, matchId, populatedMatch.currentTurn.turn);
+            startTimer(io, populatedMatch, populatedMatch.currentTurn.turn);
         } catch (err) {
             logger.error("Start Private Match Error:", err);
             socket.emit("error", { message: "Failed to start private match" });
@@ -424,7 +424,7 @@ module.exports = (io, socket) => {
                     canRollAgain: true,
                     turnDeadline: match.currentTurn.turnDeadline
                 });
-                startTimer(io, matchId, match.currentTurn.turn);
+                startTimer(io, match, match.currentTurn.turn);
                 return;
             }
 
@@ -472,7 +472,7 @@ module.exports = (io, socket) => {
                 capturePossible,
                 turnDeadline: match.currentTurn.turnDeadline
             });
-            startTimer(io, matchId, match.currentTurn.turn);
+            startTimer(io, match, match.currentTurn.turn);
 
         } catch (err) {
             logger.error(err);
@@ -579,7 +579,7 @@ module.exports = (io, socket) => {
                         capturePossible,
                         turnDeadline: match.currentTurn.turnDeadline
                     });
-                    startTimer(io, matchId, match.currentTurn.turn);
+                    startTimer(io, match, match.currentTurn.turn);
                     return;
                 }
             }
@@ -606,7 +606,7 @@ module.exports = (io, socket) => {
                     reason,
                     turnDeadline: match.currentTurn.turnDeadline
                 });
-                startTimer(io, matchId, match.currentTurn.turn);
+                startTimer(io, match, match.currentTurn.turn);
                 return;
             }
 

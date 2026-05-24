@@ -689,8 +689,8 @@ class GameLogic {
         const roomName = `game:${match._id}`;
         io.to(roomName).emit("game:turnChanged", populatedMatch.currentTurn);
 
-        startTimer(io, match._id, populatedMatch.currentTurn.turn);
-        emitTurnTimerSync(io, roomName, match);
+        startTimer(io, populatedMatch, populatedMatch.currentTurn.turn);
+        emitTurnTimerSync(io, roomName, populatedMatch);
 
         return populatedMatch.currentTurn;
     }

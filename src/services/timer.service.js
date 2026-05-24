@@ -39,8 +39,10 @@ function emitTurnTimerSync(io, target, match, { isYourTurn = null } = {}) {
     }
 }
 
-function startTimer(io, matchIdRaw, turn) {
-    const matchId = matchIdRaw.toString();
+function startTimer(io, match, turn) {
+    if (!match || !match.currentTurn || match.currentTurn.turn !== turn) return;
+
+    const matchId = match._id.toString();
     const key = `${matchId}-${turn}`;
     
     // Prevent duplicates
@@ -48,76 +50,53 @@ function startTimer(io, matchIdRaw, turn) {
         return; 
     }
 
-    // Calculate actual remaining time from the DB deadline instead of hardcoded 15s.
-    // This prevents drift when there's a gap between setting turnDeadline and calling startTimer.
-    const Match = require('../models/Match');
-    Match.findById(matchId).then(match => {
-        if (!match || !match.currentTurn || match.currentTurn.turn !== turn) return;
+    const deadline = new Date(match.currentTurn.turnDeadline);
+    const remaining = deadline.getTime() - Date.now();
+    
+    // If deadline already passed (or less than 500ms left), fire in 500ms to allow cleanup
+    const delay = Math.max(remaining, 500);
+    
+    const timeout = setTimeout(async () => {
+        const { GameLogic } = require('./game.logic');
+        const { getMatchLock } = require('../utils/lock');
+        const logger = require('../config/logger');
+        const Match = require('../models/Match');
+
+        const lock = getMatchLock(matchId);
         
-        // If a timer was created by a concurrent call while we were reading DB, bail out
-        if (timers.has(key)) return;
+        let release;
+        try {
+            release = await lock.acquire();
 
-        const deadline = new Date(match.currentTurn.turnDeadline);
-        const remaining = deadline.getTime() - Date.now();
-        
-        // If deadline already passed (or less than 500ms left), fire in 500ms to allow cleanup
-        const delay = Math.max(remaining, 500);
-        
-        const timeout = setTimeout(async () => {
-            const { GameLogic } = require('./game.logic');
-            const { getMatchLock } = require('../utils/lock');
-            const logger = require('../config/logger');
+            const freshMatch = await Match.findById(matchId);
 
-            const lock = getMatchLock(matchId);
-            
-            let release;
-            try {
-                release = await lock.acquire();
+            // Double-check turn hasn't changed or been extended while waiting for lock
+            if (freshMatch && freshMatch.state === "RUNNING" && freshMatch.currentTurn && freshMatch.currentTurn.turn === turn) {
+                const freshDeadline = new Date(freshMatch.currentTurn.turnDeadline);
+                const freshRemaining = freshDeadline.getTime() - Date.now();
 
-                const freshMatch = await Match.findById(matchId);
-
-                // Double-check turn hasn't changed while waiting for lock
-                if (freshMatch && freshMatch.state === "RUNNING" && freshMatch.currentTurn && freshMatch.currentTurn.turn === turn) {
-                    logger.info(`[Timer] Turn expired for Match: ${matchId}, Turn: ${turn}. Switching...`);
-                    await GameLogic.switchTurn(io, freshMatch, logger);
+                // If deadline was extended, do not expire the turn
+                if (freshRemaining > 500) {
+                    logger.info(`[Timer] Turn deadline extended for Match: ${matchId}, Turn: ${turn}. Skipping expiry.`);
+                    return;
                 }
-            } catch (error) {
-                console.error("====== TIMER ERROR ======");
-                console.error(error);
-                logger.error(`Error in timer callback: ${error.message}`, { stack: error.stack });
-            } finally {
-                if (release) release();
+
+                logger.info(`[Timer] Turn expired for Match: ${matchId}, Turn: ${turn}. Switching...`);
+                await GameLogic.switchTurn(io, freshMatch, logger);
+            }
+        } catch (error) {
+            console.error("====== TIMER ERROR ======");
+            console.error(error);
+            logger.error(`Error in timer callback: ${error.message}`, { stack: error.stack });
+        } finally {
+            if (release) release();
+            if (timers.get(key) === timeout) {
                 timers.delete(key);
             }
-        }, delay);
+        }
+    }, delay);
 
-        timers.set(key, timeout);
-    }).catch(err => {
-        console.error(`[Timer] Failed to read match for deadline: ${err.message}`);
-        // Fallback to 15s if DB read fails
-        const timeout = setTimeout(async () => {
-            const { GameLogic } = require('./game.logic');
-            const { getMatchLock } = require('../utils/lock');
-            const logger = require('../config/logger');
-            const lock = getMatchLock(matchId);
-            let release;
-            try {
-                release = await lock.acquire();
-                const Match2 = require('../models/Match');
-                const freshMatch = await Match2.findById(matchId);
-                if (freshMatch && freshMatch.state === "RUNNING" && freshMatch.currentTurn && freshMatch.currentTurn.turn === turn) {
-                    logger.info(`[Timer-Fallback] Turn expired for Match: ${matchId}. Switching...`);
-                    await GameLogic.switchTurn(io, freshMatch, logger);
-                }
-            } catch (e) {
-                console.error(e);
-            } finally {
-                if (release) release();
-                timers.delete(key);
-            }
-        }, 15000);
-        timers.set(key, timeout);
-    });
+    timers.set(key, timeout);
 }
 
 function clearTimer(matchId, turn) {
