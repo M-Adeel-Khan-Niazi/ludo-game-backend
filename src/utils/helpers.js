@@ -18,7 +18,7 @@ function generateOTPExpiry(minutes = 1) {
 
 const generateToken = (payload, options = {}) => {
   return jwt.sign(payload, JWT_SECRET, {
-    expiresIn: "1m",
+    expiresIn: "30d",
     ...options,
   });
 };
