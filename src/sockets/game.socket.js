@@ -402,6 +402,7 @@ module.exports = (io, socket) => {
                 match.currentTurn.rollCount++;
 
                 if (match.currentTurn.rollCount >= 3) {
+                    match.currentTurn.turnDeadline = new Date(Date.now() + 2000);
                     await match.save();
                     io.to(roomName).emit("game:diceRolled", {
                         userId: socket.user._id,
@@ -411,7 +412,7 @@ module.exports = (io, socket) => {
                         canRollAgain: false,
                         turnDeadline: match.currentTurn.turnDeadline
                     });
-                    await GameLogic.switchTurn(io, match, logger);
+                    startTimer(io, match, match.currentTurn.turn);
                     return;
                 }
 
@@ -437,6 +438,7 @@ module.exports = (io, socket) => {
             const hasValidMoves = GameLogic.hasAnyValidMove(match, player);
 
             if (!hasValidMoves) {
+                match.currentTurn.turnDeadline = new Date(Date.now() + 2000);
                 await match.save();
                 io.to(roomName).emit("game:diceRolled", {
                     userId: socket.user._id,
@@ -447,7 +449,7 @@ module.exports = (io, socket) => {
                     turnDeadline: match.currentTurn.turnDeadline
                 });
 
-                await GameLogic.switchTurn(io, match, logger);
+                startTimer(io, match, match.currentTurn.turn);
                 return;
             }
 
