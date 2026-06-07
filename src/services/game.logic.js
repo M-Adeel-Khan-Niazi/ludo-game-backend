@@ -502,7 +502,8 @@ class GameLogic {
             }
         }
 
-        if (!this.isValidMove(token, diceValue, player, match)) throw new Error("Invalid move");
+        const isCombinedDice = diceIndex === this.COMBINED_DICE_INDEX;
+        if (!this.isValidMove(token, diceValue, player, match, isCombinedDice)) throw new Error("Invalid move");
 
         // Rule 4: Forced Hit (Huff) Check logic
         let missedTokenId = null;
