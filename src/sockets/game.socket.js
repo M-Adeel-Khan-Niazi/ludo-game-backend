@@ -380,6 +380,17 @@ module.exports = (io, socket) => {
             const player = match.players.find(
                 p => p.userId.toString() === socket.user._id.toString()
             );
+
+            if (player && player.status === "DISCONNECTED") {
+                restorePlayerConnection(match, player);
+                const roomName = `game:${matchId}`;
+                io.to(roomName).emit("game:playerReconnected", {
+                    userId: socket.user._id,
+                    avatar: socket.user.avatar,
+                    fullName: socket.user.fullName,
+                });
+            }
+
             const diceCount = GameLogic.getDiceCount(player);
             const latestRoll = GameLogic.rollDice(diceCount);
 
@@ -499,6 +510,20 @@ module.exports = (io, socket) => {
 
             if (match.currentTurn.rollingPhase) {
                 return socket.emit("error", { message: "Roll dice first" });
+            }
+
+            const movingPlayer = match.players.find(
+                p => p.userId.toString() === socket.user._id.toString()
+            );
+
+            if (movingPlayer && movingPlayer.status === "DISCONNECTED") {
+                restorePlayerConnection(match, movingPlayer);
+                const roomName = `game:${matchId}`;
+                io.to(roomName).emit("game:playerReconnected", {
+                    userId: socket.user._id,
+                    avatar: socket.user.avatar,
+                    fullName: socket.user.fullName,
+                });
             }
 
             const result = await GameLogic.applyMove(match, socket.user._id, tokenId, diceIndex);
