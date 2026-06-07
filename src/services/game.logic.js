@@ -281,7 +281,7 @@ class GameLogic {
         return count + 1;
     }
 
-    isValidMove(token, diceValue, player, match) {
+    isValidMove(token, diceValue, player, match, isCombinedDice = false) {
         if (token.isFinished) return false;
 
         // Priority Rule: If player has an unused 6 and locked tokens, they MUST unlock first.
@@ -298,9 +298,9 @@ class GameLogic {
             }
         }
 
-        // Rule 1: Must open with 6
+        // Rule 1: Must open with 6 (combined dice cannot unlock tokens from HOME)
         if (token.position === this.STATE_HOME) {
-            return diceValue === 6;
+            return !isCombinedDice && diceValue === 6;
         }
 
         let potentialPos = this.getNextPosition(token, diceValue, player.hasCaptured);
@@ -457,7 +457,7 @@ class GameLogic {
 
         const combinedValue = this.getCombinedDiceValue(match, unusedIndices);
         if (combinedValue !== null) {
-            if (player.tokens.some((t) => this.isValidMove(t, combinedValue, player, match))) {
+            if (player.tokens.some((t) => this.isValidMove(t, combinedValue, player, match, true))) {
                 return true;
             }
         }
