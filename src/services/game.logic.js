@@ -171,20 +171,20 @@ class GameLogic {
      */
     resolveDoubleVsDoubleBattle(match, globalPos, attackerColor, { grantBonus = false } = {}) {
         if (globalPos === null || this.SAFE_ZONES.includes(globalPos)) {
-            return { captures: [], grantBonus: false };
+            return { captures: [], bonusCount: 0 };
         }
 
         const byColor = this.getTokensByColorAtGlobal(match, globalPos);
         const moverCount = byColor[attackerColor]?.tokens.length || 0;
         if (moverCount < 2) {
-            return { captures: [], grantBonus: false };
+            return { captures: [], bonusCount: 0 };
         }
 
         const captures = [];
-        let bonusEligible = false;
+        let capturedCount = 0;
         const attackerPlayer = match.players.find((p) => p.color === attackerColor);
         if (!attackerPlayer) {
-            return { captures, grantBonus: false };
+            return { captures, bonusCount: 0 };
         }
 
         for (const p of match.players) {
@@ -195,10 +195,10 @@ class GameLogic {
 
             this._applyTokenCaptures(enemyTokens, p, captures);
             attackerPlayer.hasCaptured = true;
-            bonusEligible = grantBonus;
+            capturedCount += enemyTokens.length;
         }
 
-        return { captures, grantBonus: bonusEligible };
+        return { captures, bonusCount: grantBonus ? capturedCount : 0 };
     }
 
     /**
@@ -206,19 +206,19 @@ class GameLogic {
      */
     resolveLandingCaptures(match, globalPos, attackerColor, { grantBonus = true } = {}) {
         if (globalPos === null || this.SAFE_ZONES.includes(globalPos)) {
-            return { captures: [], grantBonus: false };
+            return { captures: [], bonusCount: 0 };
         }
 
         const byColor = this.getTokensByColorAtGlobal(match, globalPos);
         const moverCount = byColor[attackerColor]?.tokens.length || 0;
         const captures = [];
-        let bonusEligible = false;
 
         const attackerPlayer = match.players.find(p => p.color === attackerColor);
         if (!attackerPlayer || moverCount === 0) {
-            return { captures, grantBonus: false };
+            return { captures, bonusCount: 0 };
         }
 
+        let capturedCount = 0;
         for (const p of match.players) {
             if (p.color === attackerColor) continue;
             const enemyTokens = byColor[p.color]?.tokens || [];
@@ -226,10 +226,10 @@ class GameLogic {
 
             this._applyTokenCaptures(enemyTokens, p, captures);
             attackerPlayer.hasCaptured = true;
-            bonusEligible = grantBonus;
+            capturedCount += enemyTokens.length;
         }
 
-        return { captures, grantBonus: bonusEligible };
+        return { captures, bonusCount: grantBonus ? capturedCount : 0 };
     }
 
     /**
@@ -237,18 +237,18 @@ class GameLogic {
      */
     resolveDepartureCaptures(match, globalPos, departingColor, beforeCounts) {
         if (globalPos === null || this.SAFE_ZONES.includes(globalPos)) {
-            return { captures: [], grantBonus: false };
+            return { captures: [], bonusCount: 0 };
         }
 
         const beforeDeparting = beforeCounts[departingColor] || 0;
         if (beforeDeparting < 2) {
-            return { captures: [], grantBonus: false };
+            return { captures: [], bonusCount: 0 };
         }
 
         const byColor = this.getTokensByColorAtGlobal(match, globalPos);
         const afterDeparting = byColor[departingColor]?.tokens.length || 0;
         if (afterDeparting === 0 || afterDeparting >= beforeDeparting) {
-            return { captures: [], grantBonus: false };
+            return { captures: [], bonusCount: 0 };
         }
 
         const departingEntry = byColor[departingColor];
@@ -267,7 +267,7 @@ class GameLogic {
             }
         }
 
-        return { captures, grantBonus: false };
+        return { captures, bonusCount: 0 };
     }
 
     /**
@@ -305,7 +305,7 @@ class GameLogic {
         }
 
         let potentialPos = this.getNextPosition(token, diceValue, player.hasCaptured);
-        if (potentialPos > 57) return false; // Exact throw needed
+        if (potentialPos < 0 || potentialPos > 57) return false;
 
         // Rule 3: Double Protection (No single coin can hit double coin)
         // Correction: Move is SAFE, not INVALID. You can land on double, just not capture.
@@ -563,10 +563,10 @@ class GameLogic {
             if (battleResult.captures.length > 0) {
                 captures = captures.concat(battleResult.captures);
                 captured = battleResult.captures[0];
-                if (battleResult.grantBonus) {
+                if (battleResult.bonusCount > 0) {
                     bonusTurn = true;
                     bonusReason = 'capture';
-                    match.currentTurn.pendingBonus = (match.currentTurn.pendingBonus || 0) + 1;
+                    match.currentTurn.pendingBonus = (match.currentTurn.pendingBonus || 0) + battleResult.bonusCount;
                 }
             }
         }
@@ -594,10 +594,10 @@ class GameLogic {
                 if (landingResult.captures.length > 0) {
                     captures = captures.concat(landingResult.captures);
                     captured = captured || landingResult.captures[0];
-                    if (landingResult.grantBonus) {
+                    if (landingResult.bonusCount > 0) {
                         bonusTurn = true;
                         bonusReason = 'capture';
-                        match.currentTurn.pendingBonus = (match.currentTurn.pendingBonus || 0) + 1;
+                        match.currentTurn.pendingBonus = (match.currentTurn.pendingBonus || 0) + landingResult.bonusCount;
                     }
                 }
             }
@@ -634,7 +634,7 @@ class GameLogic {
             this.getUnusedDiceIndices(match).length === 0;
 
         // Check Win Condition
-        const winnerId = this.checkWinCondition(match);
+        const winnerId = this.checkWinCondition(match) || this.checkUnstoppableWin(match);
 
         return {
             captured,
@@ -717,6 +717,53 @@ class GameLogic {
                 }
             }
         }
+        return null;
+    }
+
+    /**
+     * Check if a player/team has an unstoppable win:
+     * All their tokens are on home path or finished, and no opponent can reach home.
+     */
+    checkUnstoppableWin(match) {
+        const activePlayers = match.players.filter(p => p.status === 'ACTIVE' || p.status === 'DISCONNECTED');
+
+        if (match.gameType === '1V1') {
+            for (const player of activePlayers) {
+                const allSafe = player.tokens.every(t => t.isFinished || (t.position >= 52 && t.position <= 57));
+                if (!allSafe) continue;
+
+                const opponent = activePlayers.find(p => p.color !== player.color);
+                if (!opponent) continue;
+
+                const opponentCanReachHome = opponent.hasCaptured ||
+                    opponent.tokens.some(t => t.isFinished || (t.position >= 52 && t.position <= 57));
+
+                if (!opponentCanReachHome) {
+                    return player.userId;
+                }
+            }
+        } else if (match.gameType === '2V2') {
+            for (let teamId of [1, 2]) {
+                const teamPlayers = activePlayers.filter(p => p.team === teamId);
+                const opponentPlayers = activePlayers.filter(p => p.team !== teamId);
+
+                if (teamPlayers.length === 0 || opponentPlayers.length === 0) continue;
+
+                const allTeamSafe = teamPlayers.every(p =>
+                    p.tokens.every(t => t.isFinished || (t.position >= 52 && t.position <= 57))
+                );
+                if (!allTeamSafe) continue;
+
+                const anyOpponentCanReachHome = opponentPlayers.some(p =>
+                    p.hasCaptured || p.tokens.some(t => t.isFinished || (t.position >= 52 && t.position <= 57))
+                );
+
+                if (!anyOpponentCanReachHome) {
+                    return teamPlayers[0].userId;
+                }
+            }
+        }
+
         return null;
     }
 
