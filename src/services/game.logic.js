@@ -91,10 +91,11 @@ class GameLogic {
         }
         let nextPos = token.position + diceValue;
         if (hasCaptured) {
-            if (token.position <= 50 && nextPos > 50) {
+            if (nextPos > 50 && token.position <= 50) {
                 nextPos += 1;
-            } else if (token.position <= 51 && nextPos > 51) {
-                nextPos = nextPos % 52;
+            }
+            if (nextPos > 57) {
+                return -1;
             }
         } else {
             if (nextPos > 51) {

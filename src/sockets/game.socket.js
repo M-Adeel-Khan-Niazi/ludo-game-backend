@@ -604,6 +604,7 @@ module.exports = (io, socket) => {
                         reason: 'continue_move',
                         captureWarning,
                         capturePossible,
+                        pendingBonus: match.currentTurn.pendingBonus,
                         turnDeadline: match.currentTurn.turnDeadline
                     });
                     startTimer(io, match, match.currentTurn.turn);
@@ -631,6 +632,7 @@ module.exports = (io, socket) => {
                     message: messages[reason] || messages.bonus,
                     extraTurn: true,
                     reason,
+                    pendingBonus: match.currentTurn.pendingBonus,
                     turnDeadline: match.currentTurn.turnDeadline
                 });
                 startTimer(io, match, match.currentTurn.turn);
