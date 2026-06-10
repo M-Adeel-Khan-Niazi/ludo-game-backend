@@ -65,9 +65,16 @@ class MatchController {
             // Logic: Find existing or Create new
             const match = await MatchService.findAndJoin(userId, gameType, joiningFee);
 
+            let message = "Match Started";
+            if (match.state !== "RUNNING") {
+                message = match.isVsBot
+                    ? "Bots joined — connect via socket to play"
+                    : "Waiting for opponents (bots fill empty slots after a short delay)";
+            }
+
             return res.status(200).json({
                 success: true,
-                message: match.players.length === match.maxPlayers ? "Match Started" : "Waiting for players",
+                message,
                 data: match
             });
         } catch (error) {

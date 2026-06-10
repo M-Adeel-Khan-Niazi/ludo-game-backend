@@ -694,6 +694,9 @@ class GameLogic {
         startTimer(io, populatedMatch, populatedMatch.currentTurn.turn);
         emitTurnTimerSync(io, roomName, populatedMatch);
 
+        const BotService = require("./bot.service");
+        BotService.onTurnChanged(io, match._id);
+
         return populatedMatch.currentTurn;
     }
 

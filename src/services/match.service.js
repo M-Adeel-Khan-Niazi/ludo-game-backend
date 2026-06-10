@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const Match = require("../models/Match");
 const User = require("../models/User");
 const WalletService = require("./wallet.service"); // Using the file provided by user mapping
+const { getMatchLock } = require("../utils/lock");
 
 // Helper to generate 6-digit room code
 const generateRoomCode = () => Math.floor(100000 + Math.random() * 900000).toString();
@@ -32,6 +33,7 @@ class MatchService {
         const paid = paidUserIds instanceof Set ? paidUserIds : new Set(paidUserIds);
 
         for (const p of match.players) {
+            if (p.isBot) continue;
             await User.findByIdAndUpdate(this._playerId(p.userId), {
                 $inc: { "playerStats.gamesPlayed": 1 },
             });
@@ -39,10 +41,17 @@ class MatchService {
 
         if (gameType === "2V2") {
             for (const userId of paid) {
+                const player = match.players.find((p) => this._playerId(p.userId) === userId);
+                if (player?.isBot) continue;
                 await User.findByIdAndUpdate(userId, { $inc: { [winField]: 1 } });
             }
             return;
         }
+
+        const winnerPlayer = match.players.find(
+            (p) => this._playerId(p.userId) === this._playerId(winnerId)
+        );
+        if (winnerPlayer?.isBot) return;
 
         await User.findByIdAndUpdate(this._playerId(winnerId), { $inc: { [winField]: 1 } });
     }
@@ -97,8 +106,13 @@ class MatchService {
             const populatedMatch = await Match.findById(match._id)
                 .populate({
                     path: "players.userId",
-                    select: "_id fullName playerStats avatar"
+                    select: "_id fullName playerStats avatar isBot"
                 });
+
+            if (!isPrivate) {
+                const BotService = require("./bot.service");
+                BotService.scheduleFill(match._id);
+            }
 
             return populatedMatch;
         } catch (error) {
@@ -115,6 +129,7 @@ class MatchService {
             gameType,
             joiningFee,
             isPrivate: false,
+            isVsBot: { $ne: true },
             state: "WAITING",
             $expr: { $lt: [{ $size: "$players" }, "$maxPlayers"] },
             "players.userId": { $ne: userId }
@@ -124,11 +139,18 @@ class MatchService {
     }
 
     async joinMatch(userId, matchId) {
+        const lock = getMatchLock(matchId);
+        const release = await lock.acquire();
+
+        try {
         const match = await Match.findById(matchId);
         if (!match) throw new Error("Match not found");
         if (match.state !== "WAITING") throw new Error("Match is not available to join");
         if (match.players.length >= match.maxPlayers) throw new Error("Match is full");
         if (match.players.some(p => p.userId.toString() === userId.toString())) throw new Error("Already joined");
+
+        const BotService = require("./bot.service");
+        BotService.cancelScheduledFill(match._id);
 
         // Lock coins
         await WalletService.joinGame(userId, match.joiningFee, match._id);
@@ -171,6 +193,10 @@ class MatchService {
         }
 
         await match.save();
+        if (match.state === "RUNNING" && global.io) {
+            const BotService = require("./bot.service");
+            BotService.onTurnChanged(global.io, match._id);
+        }
         const populatedMatch = await Match.findById(match._id)
             .populate({
                 path: "players.userId",
@@ -182,6 +208,9 @@ class MatchService {
             });
 
         return populatedMatch;
+        } finally {
+            release();
+        }
     }
 
     // Use this if auto-matching
@@ -319,8 +348,12 @@ class MatchService {
 
         const { GameLogic } = require("./game.logic");
 
-        // Prize Calculation
-        const pool = match.joiningFee * match.players.length;
+        // Prize Calculation (bot matches use virtual 2-player pool for 1v1-style payout)
+        const humanCount = match.players.filter((p) => !p.isBot).length;
+        const poolPlayerCount = match.isVsBot
+            ? Math.max(humanCount * 2, 2)
+            : match.players.length;
+        const pool = match.joiningFee * poolPlayerCount;
         const netPrize = Math.floor(pool * match.winningMultiplier);
         const prize = netPrize;
         const adminDiff = pool - netPrize;
@@ -339,10 +372,12 @@ class MatchService {
             const secondPrize = netPrize - firstPrize;
 
             // Credit Winner
-            await WalletService.settleWin(winner.userId, match.joiningFee, firstPrize, match._id);
+            if (!winner.isBot) {
+                await WalletService.settleWin(winner.userId, match.joiningFee, firstPrize, match._id);
+            }
 
             // Credit Runner Up (if eligible)
-            if (runnerUp && runnerUp.isEligible) {
+            if (runnerUp && runnerUp.isEligible && !runnerUp.isBot) {
                 await WalletService.settleWin(runnerUp.userId, match.joiningFee, secondPrize, match._id);
                 paidUserIds.add(runnerUp.userId.toString());
             }
@@ -357,17 +392,25 @@ class MatchService {
                 const splitPrize = Math.floor(netPrize / teamMembers.length);
 
                 for (const member of teamMembers) {
-                    await WalletService.settleWin(member.userId, match.joiningFee, splitPrize, match._id);
+                    if (!member.isBot) {
+                        await WalletService.settleWin(member.userId, match.joiningFee, splitPrize, match._id);
+                    }
                     paidUserIds.add(member.userId.toString());
                 }
             }
         } else {
             // 1v1 or others - Winner Takes All
-            await WalletService.settleWin(winnerId, match.joiningFee, netPrize, match._id);
+            const winnerPlayer = match.players.find(
+                (p) => p.userId.toString() === winnerId.toString()
+            );
+            if (!winnerPlayer?.isBot) {
+                await WalletService.settleWin(winnerId, match.joiningFee, netPrize, match._id);
+            }
         }
 
         // Handle Losers (Unlock/Burn their locked coins via settleLoss)
         for (const p of match.players) {
+            if (p.isBot) continue;
             if (!paidUserIds.has(p.userId.toString())) {
                 await WalletService.settleLoss(p.userId, match.joiningFee, match._id);
             } else {

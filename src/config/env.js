@@ -20,4 +20,7 @@ module.exports = {
   FIREBASE_CLIENT_EMAIL: process.env.FIREBASE_CLIENT_EMAIL,
   FROM_EMAIL: process.env.FROM_EMAIL,
   RESEND_KEY: process.env.RESEND_KEY,
+  BOT_ENABLED: process.env.BOT_ENABLED !== "false",
+  BOT_FILL_DELAY_MS: parseInt(process.env.BOT_FILL_DELAY_MS, 10) || 4000,
+  BOT_TURN_DELAY_MS: parseInt(process.env.BOT_TURN_DELAY_MS, 10) || 1200,
 };

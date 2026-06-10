@@ -51,6 +51,7 @@ const userSchema = new Schema(
       enum: ["user", "admin"],
       default: "user",
     },
+    isBot: { type: Boolean, default: false },
     isActive: { type: Boolean, default: true },
     isVerified: { type: Boolean, default: false },
     isDeleted: { type: Boolean, default: false },
@@ -77,6 +78,14 @@ userSchema.pre("save", async function (next) {
 userSchema.methods.comparePassword = async function (candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password);
 };
+
+userSchema.index(
+  { userName: 1, isBot: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { isBot: true, userName: { $type: "string" } },
+  }
+);
 
 userSchema.set("toJSON", {
   transform: function (doc, ret) {

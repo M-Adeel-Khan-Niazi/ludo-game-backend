@@ -12,9 +12,11 @@ const MatchSchema = new Schema(
     joiningFee: { type: Number, default: 0 },
     winningMultiplier: { type: Number, default: 1 },
 
+    isVsBot: { type: Boolean, default: false },
     players: [{
       color: { type: String, enum: ["red", "green", "yellow", "blue"] },
       userId: { type: Schema.Types.ObjectId, ref: "User" },
+      isBot: { type: Boolean, default: false },
       team: { type: Number, default: null }, // 1 or 2 (for 2v2)
       status: { type: String, enum: ["ACTIVE", "LEFT", "DISCONNECTED", "DISQUALIFIED", "WON"] },
       isHost: { type: Boolean, default: false }, // Rule-14
