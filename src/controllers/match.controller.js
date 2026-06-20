@@ -6,12 +6,12 @@ class MatchController {
     // Create specific match (Private or specific config)
     async create(req, res) {
         try {
-            const { color, gameType, joiningFee, isPrivate = false } = req.body;
+            const { color, gameType, joiningFee, isPrivate = false, difficultyTier } = req.body;
             const userId = req.user._id;
 
             if (!joiningFee && joiningFee !== 0) return res.status(400).json({ message: "Joining fee required" });
 
-            const match = await MatchService.createMatchAndJoin(userId, color, gameType, joiningFee, isPrivate);
+            const match = await MatchService.createMatchAndJoin(userId, color, gameType, joiningFee, isPrivate, undefined, difficultyTier);
 
             return res.status(201).json({
                 success: true,
@@ -59,11 +59,11 @@ class MatchController {
     // Quick Play / Matchmaking
     async findPubic(req, res) {
         try {
-            const { gameType, joiningFee } = req.body;
+            const { gameType, joiningFee, difficultyTier } = req.body;
             const userId = req.user._id;
 
             // Logic: Find existing or Create new
-            const match = await MatchService.findAndJoin(userId, gameType, joiningFee);
+            const match = await MatchService.findAndJoin(userId, gameType, joiningFee, difficultyTier);
 
             let message = "Match Started";
             if (match.state !== "RUNNING") {
@@ -79,6 +79,32 @@ class MatchController {
             });
         } catch (error) {
             console.error("Find Match Error:", error);
+            return res.status(400).json({ success: false, message: error.message });
+        }
+    }
+
+    // Practice Mode — play against bots, 0 fee, bypasses BOT_ENABLED
+    async practice(req, res) {
+        try {
+            const { gameType, difficultyTier } = req.body;
+            const userId = req.user._id;
+
+            if (!gameType) return res.status(400).json({ success: false, message: "gameType is required" });
+
+            const validTypes = ["1V1", "4P", "2V2"];
+            if (!validTypes.includes(gameType.toUpperCase())) {
+                return res.status(400).json({ success: false, message: "Invalid gameType. Must be 1V1, 4P, or 2V2" });
+            }
+
+            const match = await MatchService.createPracticeMatch(userId, gameType.toUpperCase(), difficultyTier || "BRONZE");
+
+            return res.status(201).json({
+                success: true,
+                message: "Practice match started — playing against bots",
+                data: match
+            });
+        } catch (error) {
+            console.error("Practice Match Error:", error);
             return res.status(400).json({ success: false, message: error.message });
         }
     }
@@ -113,7 +139,7 @@ class MatchController {
             const match = await Match.findOne({ roomCode });
             
             if (!match) {
-                return res.status(404).json({ success: false, message: "Match does not exist" });
+                return res.status(404).json({ success: false, message: "Room not found!" });
             }
             
             if (match.state !== "WAITING") {

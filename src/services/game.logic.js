@@ -55,8 +55,8 @@ class GameLogic {
      * Get the next turn color
      */
     getNextTurnColor(currentMatch) {
-        // Custom Turn Order: Red -> Yellow -> Green -> Blue
-        const colors = ['red', 'yellow', 'green', 'blue'];
+        // Clockwise Turn Order: Red -> Green -> Yellow -> Blue
+        const colors = ['red', 'green', 'yellow', 'blue'];
         const activePlayers = currentMatch.players
             .filter(p => p.status === 'ACTIVE' || p.status === 'DISCONNECTED')
             .sort((a, b) => colors.indexOf(a.color) - colors.indexOf(b.color));
@@ -794,7 +794,7 @@ class GameLogic {
         // Map to intermediate object
         const playersWithScore = match.players.map(p => {
             // Handle populated or unpopulated userId
-            const uId = p.userId._id ? p.userId._id.toString() : p.userId.toString();
+            const uId = (p.userId?._id ? p.userId._id.toString() : (p.userId?.toString() || "unknown"));
             return {
                 ...p.toObject ? p.toObject() : p,
                 score: this.calculatePlayerScore(p),
@@ -848,13 +848,13 @@ class GameLogic {
         // Determine Winning Team (for 2v2)
         let winningTeam = null;
         if (match.gameType === "2V2") {
-            const winnerPlayer = match.players.find(p => p.userId._id.toString() === winnerIdStr);
+            const winnerPlayer = match.players.find(p => p.userId?._id?.toString() === winnerIdStr || p.userId?.toString() === winnerIdStr);
             if (winnerPlayer) winningTeam = winnerPlayer.team;
         }
 
         // Map ranked players to response format
         const playersData = rankedPlayers.map((p, index) => {
-            const pId = p.userId._id ? p.userId._id.toString() : p.userId.toString();
+            const pId = p.userId?._id ? p.userId._id.toString() : (p.userId?.toString() || "unknown");
             const isWinner = p.isWinner || (winningTeam && p.team === winningTeam);
             let winningAmount = 0;
 
@@ -877,9 +877,9 @@ class GameLogic {
             }
 
             return {
-                userId: p.userId._id,
-                name: p.userId.fullName || p.userId.userName || "Unknown",
-                avatar: p.userId.avatar,
+                userId: p.userId?._id || p.userId,
+                name: p.userId?.fullName || p.userId?.userName || "Unknown",
+                avatar: p.userId?.avatar || null,
                 team: p.team,
                 // tokensHome, // Removed as requested
                 isWinner,

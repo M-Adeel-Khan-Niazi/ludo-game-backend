@@ -6,6 +6,11 @@ const MatchSchema = new Schema(
       type: String,
       enum: ["1V1", "2V2", "4P", "PRIVATE", "TOURNAMENT"]
     },
+    difficultyTier: {
+      type: String,
+      enum: ["BRONZE", "SILVER", "GOLD", "PLATINUM"],
+      default: "BRONZE"
+    },
     roomCode: { type: String, unique: true },
     maxPlayers: { type: Number, required: true },
 

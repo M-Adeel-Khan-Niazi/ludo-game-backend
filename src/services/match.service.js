@@ -68,9 +68,10 @@ class MatchService {
     // 3. Update Match with player.
     // If 2 fails, we delete Match.
 
-    async createMatchAndJoin(userId, color = 'red', gameType, joiningFee, isPrivate, playersCount) {
+    async createMatchAndJoin(userId, color = 'red', gameType, joiningFee, isPrivate, playersCount, difficultyTier) {
         const match = new Match({
             gameType,
+            difficultyTier: difficultyTier || "BRONZE",
             joiningFee,
             isPrivate,
             roomCode: generateRoomCode(),
@@ -152,12 +153,17 @@ class MatchService {
         const BotService = require("./bot.service");
         BotService.cancelScheduledFill(match._id);
 
+        // Reschedule bot fill if room is still not full after a real player joins
+        if (match.players.length < match.maxPlayers && !match.isPrivate) {
+            BotService.scheduleFill(match._id);
+        }
+
         // Lock coins
         await WalletService.joinGame(userId, match.joiningFee, match._id);
 
         // Determine color/position
         const usedColors = match.players.map(p => p.color);
-        // Custom Color Order: Red -> Yellow -> Green -> Blue
+        // Diagonal-first fill order: Red -> Yellow -> Green -> Blue
         const allColors = ["red", "yellow", "green", "blue"];
         const nextColor = allColors.find(c => !usedColors.includes(c));
 
@@ -165,7 +171,7 @@ class MatchService {
             userId,
             color: nextColor, 
             status: "ACTIVE",
-            team: match.gameType === "2V2" ? (match.players.length < 2 ? 1 : 2) : null,
+            team: match.gameType === "2V2" ? (match.players.length % 2 === 0 ? 1 : 2) : null,
             isHost: false,
             tokens: [
                 { tokenId: `${nextColor[0].toUpperCase()}1`, position: -1, isFinished: false },
@@ -200,11 +206,11 @@ class MatchService {
         const populatedMatch = await Match.findById(match._id)
             .populate({
                 path: "players.userId",
-                select: "_id fullName playerStats avatar"
+                select: "_id fullName playerStats avatar isBot"
             })
             .populate({
                 path: "currentTurn.userId",
-                select: "_id fullName playerStats avatar"
+                select: "_id fullName playerStats avatar isBot"
             });
 
         return populatedMatch;
@@ -214,13 +220,65 @@ class MatchService {
     }
 
     // Use this if auto-matching
-    async findAndJoin(userId, gameType, joiningFee) {
+    async findAndJoin(userId, gameType, joiningFee, difficultyTier) {
         const existing = await this.findPublicMatch(userId, gameType, joiningFee);
         if (existing) {
             return await this.joinMatch(userId, existing._id);
         }
         // Create new
-        return await this.createMatchAndJoin(userId, 'red', gameType, joiningFee, false);
+        return await this.createMatchAndJoin(userId, 'red', gameType, joiningFee, false, undefined, difficultyTier);
+    }
+
+    /**
+     * Create a practice match against bots (0 joining fee, 0 winnings).
+     * Bypasses BOT_ENABLED toggle — practice mode always works.
+     */
+    async createPracticeMatch(userId, gameType, difficultyTier) {
+        const BotService = require("./bot.service");
+
+        const maxPlayers = (gameType === "1V1") ? 2 : 4;
+        const match = new Match({
+            gameType,
+            difficultyTier: difficultyTier || "BRONZE",
+            joiningFee: 0,
+            winningMultiplier: 0,
+            isPrivate: false,
+            isVsBot: true,
+            roomCode: generateRoomCode(),
+            maxPlayers,
+            players: [],
+            state: "WAITING",
+            adminProfit: 0,
+        });
+
+        await match.save();
+
+        const color = "red";
+        match.players.push({
+            userId,
+            color,
+            status: "ACTIVE",
+            team: gameType === "2V2" ? 1 : null,
+            isHost: true,
+            hasCaptured: false,
+            isBot: false,
+            tokens: [
+                { tokenId: `${color[0].toUpperCase()}1`, position: -1, isFinished: false },
+                { tokenId: `${color[0].toUpperCase()}2`, position: -1, isFinished: false },
+                { tokenId: `${color[0].toUpperCase()}3`, position: -1, isFinished: false },
+                { tokenId: `${color[0].toUpperCase()}4`, position: -1, isFinished: false },
+            ],
+        });
+
+        await match.save();
+
+        await BotService.fillPracticeBots(match._id);
+
+        const populatedMatch = await Match.findById(match._id)
+            .populate({ path: "players.userId", select: "_id fullName playerStats avatar isBot" })
+            .populate({ path: "currentTurn.userId", select: "_id fullName playerStats avatar isBot" });
+
+        return populatedMatch;
     }
     /**
      * Handle player leaving a match
@@ -242,15 +300,17 @@ class MatchService {
             if (isActualHost || match.players.length === 1) {
                 // Refund everyone currently in the match
                 for (const p of match.players) {
+                    if (p.isBot) continue;
                     try {
                         await WalletService.cancelGame(p.userId, match.joiningFee, match._id);
                     } catch (err) {
                         console.error(`Error refunding player ${p.userId} on match cancel:`, err.message);
                     }
                 }
-                match.state = "CANCELLED"; // Update state in memory for the final socket broadcast
-                await Match.findByIdAndDelete(match._id); // Hard delete from database
-                return { action: "MATCH_CANCELLED_BY_HOST", match };
+                match.state = "CANCELLED";
+                const botIds = match.players.filter(p => p.isBot).map(p => p.userId.toString());
+                await Match.findByIdAndDelete(match._id);
+                return { action: "MATCH_CANCELLED_BY_HOST", match, botIds };
             } else {
                 // Non-host leaving a lobby with others present
                 try {
@@ -270,39 +330,65 @@ class MatchService {
             if (match.gameType && match.gameType.toUpperCase() === "1V1") {
                 const opponent = match.players.find(p => p.userId.toString() !== userId.toString());
                 if (opponent) {
-                    // Settle Wallet Logic
-
-                    // Leaver: Loss (Lose joining fee)
-                    await WalletService.settleLoss(userId, match.joiningFee, match._id);
-
-                    // Winner: Win
-                    // Prize = Pool * Multiplier
-                    const pool = match.joiningFee * 2;
-                    const prize = Math.floor(pool * match.winningMultiplier);
-                    const adminDiff = pool - prize;
-
-                    await WalletService.settleWin(opponent.userId, match.joiningFee, prize, match._id);
-
-                    match.winner = opponent.userId;
-                    match.winningAmount = prize;
-                    match.adminProfit = (match.adminProfit || 0) + adminDiff;
-                    match.state = "COMPLETED";
-
                     player.status = "LEFT";
 
+                    // Leaver: Loss (Lose joining fee) — skip for bots and practice matches
+                    if (!player.isBot && match.joiningFee > 0) {
+                        try {
+                            await WalletService.settleLoss(userId, match.joiningFee, match._id);
+                        } catch (err) {
+                            console.error(`Error settling loss for leaver ${userId} in 1v1:`, err.message);
+                        }
+                    }
+
+                    // Winner: Win — skip for bots; for practice (0 fee) only settle if non-zero
+                    if (!opponent.isBot && match.joiningFee > 0) {
+                        const pool = match.joiningFee * 2;
+                        const prize = Math.floor(pool * match.winningMultiplier);
+                        const adminDiff = pool - prize;
+
+                        try {
+                            await WalletService.settleWin(opponent.userId, match.joiningFee, prize, match._id);
+                        } catch (err) {
+                            console.error(`Error settling win for opponent ${opponent.userId} in 1v1:`, err.message);
+                        }
+
+                        match.winningAmount = prize;
+                        match.adminProfit = (match.adminProfit || 0) + adminDiff;
+                    } else if (opponent.isBot && !player.isBot) {
+                        // Human left, bot wins — settle human loss only
+                        const pool = match.joiningFee * 2;
+                        const prize = Math.floor(pool * match.winningMultiplier);
+                        match.winningAmount = prize;
+                        match.adminProfit = (match.adminProfit || 0) + (pool - prize);
+                    } else {
+                        match.winningAmount = 0;
+                    }
+
+                    match.winner = opponent.userId;
+                    match.state = "COMPLETED";
+
                     await match.save();
-                    await this._updatePlayerStatsOnGameEnd(
-                        match,
-                        opponent.userId,
-                        new Set([this._playerId(opponent.userId)])
-                    );
-                    return { action: "GAME_ENDED", winnerId: opponent.userId, winnerAmount: prize, match };
+                    if (!opponent.isBot) {
+                        await this._updatePlayerStatsOnGameEnd(
+                            match,
+                            opponent.userId,
+                            new Set([this._playerId(opponent.userId)])
+                        );
+                    }
+                    return { action: "GAME_ENDED", winnerId: opponent.userId, winnerAmount: match.winningAmount, match };
                 }
             }
 
             // Rule 3: Other matches → Mark as LEFT
             player.status = "LEFT";
-            await WalletService.settleLoss(userId, match.joiningFee, match._id);
+            if (!player.isBot && match.joiningFee > 0) {
+                try {
+                    await WalletService.settleLoss(userId, match.joiningFee, match._id);
+                } catch (err) {
+                    console.error(`Error settling loss for leaver ${userId}:`, err.message);
+                }
+            }
 
             player.tokens.forEach(t => t.position = -1);
             await match.save();
@@ -314,12 +400,19 @@ class MatchService {
                 const teamEliminated = teamPlayers.every(p => ["LEFT", "DISQUALIFIED"].includes(p.status));
 
                 if (teamEliminated) {
-                    // The entire team is gone — opposing team wins
                     const opposingTeam = match.players.filter(p => p.team !== leaverTeam && !["LEFT", "DISQUALIFIED"].includes(p.status));
                     if (opposingTeam.length > 0) {
                         const winnerId = opposingTeam[0].userId;
-                        const { prize } = await this.settleGame(match, winnerId);
-                        return { action: "GAME_ENDED", winnerId, winnerAmount: prize, reason: "Opponent Team Left", match };
+                        try {
+                            const { prize } = await this.settleGame(match, winnerId);
+                            return { action: "GAME_ENDED", winnerId, winnerAmount: prize, reason: "Opponent Team Left", match };
+                        } catch (err) {
+                            console.error(`Error settling 2v2 game on team elimination:`, err.message);
+                            match.state = "COMPLETED";
+                            match.winner = winnerId;
+                            await match.save();
+                            return { action: "GAME_ENDED", winnerId, winnerAmount: 0, reason: "Opponent Team Left", match };
+                        }
                     }
                 }
             }
@@ -329,9 +422,31 @@ class MatchService {
 
             if (remaining.length === 1) {
                 const winnerId = remaining[0].userId;
-                // Settle
-                const { prize } = await this.settleGame(match, winnerId);
-                return { action: "GAME_ENDED", winnerId, winnerAmount: prize, reason: "Last Man Standing", match };
+                try {
+                    const { prize } = await this.settleGame(match, winnerId);
+                    return { action: "GAME_ENDED", winnerId, winnerAmount: prize, reason: "Last Man Standing", match };
+                } catch (err) {
+                    console.error(`Error settling game on last man standing:`, err.message);
+                    match.state = "COMPLETED";
+                    match.winner = winnerId;
+                    await match.save();
+                    return { action: "GAME_ENDED", winnerId, winnerAmount: 0, reason: "Last Man Standing", match };
+                }
+            }
+
+            // Check if all remaining active players are bots → auto-complete match
+            if (remaining.length > 1 && remaining.every(p => p.isBot)) {
+                const winnerId = remaining[0].userId;
+                try {
+                    const { prize } = await this.settleGame(match, winnerId);
+                    return { action: "GAME_ENDED", winnerId, winnerAmount: prize, reason: "All Humans Left", match };
+                } catch (err) {
+                    console.error(`Error settling game when all humans left:`, err.message);
+                    match.state = "COMPLETED";
+                    match.winner = winnerId;
+                    await match.save();
+                    return { action: "GAME_ENDED", winnerId, winnerAmount: 0, reason: "All Humans Left", match };
+                }
             }
 
             return { action: "PLAYER_LEFT_GAME", match };
@@ -409,8 +524,10 @@ class MatchService {
         }
 
         // Handle Losers (Unlock/Burn their locked coins via settleLoss)
+        // Skip players who already had their loss settled via leaveMatch
         for (const p of match.players) {
             if (p.isBot) continue;
+            if (["LEFT", "DISQUALIFIED"].includes(p.status)) continue;
             if (!paidUserIds.has(p.userId.toString())) {
                 await WalletService.settleLoss(p.userId, match.joiningFee, match._id);
             } else {
@@ -509,7 +626,7 @@ class MatchService {
         const tournament = await Tournament.findOne({
             "players.userId": userId
         }).sort({ createdAt: -1 })
-        .populate("players.userId", "_id fullName avatar");
+        .populate("players.userId", "_id fullName avatar playerStats isBot");
 
         if (tournament) {
             // Case: Registered but not started

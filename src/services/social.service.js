@@ -16,7 +16,7 @@ class SocialService {
 
             // Fetch target user and current user
             const [targetUser, me] = await Promise.all([
-                User.findById(targetUserId).select("fullName userName avatar playerStats blockedUsers"),
+                User.findById(targetUserId).select("fullName userName avatar playerStats blockedUsers isBot"),
                 User.findById(userId).select("blockedUsers")
             ]);
 
@@ -61,6 +61,11 @@ class SocialService {
             const targetUserData = targetUser.toObject();
             delete targetUserData.blockedUsers;
 
+            // If target is a bot, return a restricted connectionStatus so frontend can hide social actions
+            if (targetUser.isBot) {
+                connectionStatus = "restricted";
+            }
+
             return handlers.response.success({
                 res,
                 data: { ...targetUserData, connectionStatus }
@@ -79,6 +84,12 @@ class SocialService {
 
             if (userId.toString() === targetUserId) {
                 return handlers.response.failed({ res, message: "Cannot perform action on yourself" });
+            }
+
+            // Block social actions on bot users
+            const targetIsBot = await User.findById(targetUserId).select("isBot");
+            if (targetIsBot && targetIsBot.isBot) {
+                return handlers.response.failed({ res, message: "Cannot perform this action on a bot" });
             }
 
             // Check if target blocks me
@@ -254,6 +265,12 @@ class SocialService {
             const { targetUserId } = req.body;
             const userId = req.user._id;
 
+            // Block social actions on bot users
+            const targetIsBot = await User.findById(targetUserId).select("isBot");
+            if (targetIsBot && targetIsBot.isBot) {
+                return handlers.response.failed({ res, message: "Cannot perform this action on a bot" });
+            }
+
             // Add to blocked list AND remove from friends list
             await User.findByIdAndUpdate(userId, { 
                 $addToSet: { blockedUsers: targetUserId },
@@ -305,6 +322,12 @@ class SocialService {
 
             if (userId.toString() === targetUserId) {
                 return handlers.response.failed({ res, message: "Cannot send coins to yourself" });
+            }
+
+            // Block social actions on bot users
+            const targetIsBot = await User.findById(targetUserId).select("isBot");
+            if (targetIsBot && targetIsBot.isBot) {
+                return handlers.response.failed({ res, message: "Cannot send coins to a bot" });
             }
 
             if (!targetUserId || !mongoose.Types.ObjectId.isValid(targetUserId)) {
@@ -415,6 +438,12 @@ class SocialService {
         try {
             const { reportedUserId, reason, description } = req.body;
             const userId = req.user._id;
+
+            // Block social actions on bot users
+            const targetIsBot = await User.findById(reportedUserId).select("isBot");
+            if (targetIsBot && targetIsBot.isBot) {
+                return handlers.response.failed({ res, message: "Cannot report a bot" });
+            }
 
             const report = await Report.create({
                 reporter: userId,

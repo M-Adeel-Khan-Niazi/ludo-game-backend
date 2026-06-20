@@ -9,6 +9,9 @@ router.post("/create", authenticateJwt, MatchController.create.bind(MatchControl
 // Find public match (Auto Join)
 router.post("/find", authenticateJwt, MatchController.findPubic.bind(MatchController));
 
+// Practice mode (Play with bots, 0 fee, independent of BOT_ENABLED)
+router.post("/practice", authenticateJwt, MatchController.practice.bind(MatchController));
+
 // Join specific match (by RoomCode or ID)
 router.post("/join", authenticateJwt, MatchController.join.bind(MatchController));
 

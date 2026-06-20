@@ -1,4 +1,5 @@
 const timers = new Map();
+const logger = require("../config/logger");
 
 /**
  * Build timer payload for client sync (uses persisted turnDeadline).
@@ -45,9 +46,12 @@ function startTimer(io, match, turn) {
     const matchId = match._id.toString();
     const key = `${matchId}-${turn}`;
     
-    // Prevent duplicates
+    // Prevent duplicates — clear old timer and restart to ensure freshness
     if (timers.has(key)) {
-        return; 
+        const oldTimeout = timers.get(key);
+        clearTimeout(oldTimeout);
+        timers.delete(key);
+        logger.warn(`[Timer] Duplicate key ${key} detected — clearing old timer and restarting`);
     }
 
     const deadline = new Date(match.currentTurn.turnDeadline);
@@ -107,9 +111,15 @@ function clearTimer(matchId, turn) {
     }
 }
 
+function isTimerRunning(matchId, turn) {
+    const key = `${matchId}-${turn}`;
+    return timers.has(key);
+}
+
 module.exports = {
     startTimer,
     clearTimer,
     getTurnTimerPayload,
     emitTurnTimerSync,
+    isTimerRunning,
 };

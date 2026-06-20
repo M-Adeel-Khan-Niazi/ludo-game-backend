@@ -13,6 +13,7 @@ const coinPurchaseSchema = new Schema(
     amount: { type: Number, default: 0 },
     amountType: { type: String, enum: ["PKR", "USD"] },
     transactionId: { type: String, default: "" },
+    receipt: { type: String, default: "" },
     gatewayFee: { type: Number, default: 0 },
 
     provider: {

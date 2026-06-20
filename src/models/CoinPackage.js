@@ -9,6 +9,8 @@ const coinPackageSchema = new Schema(
         coins: { type: Number, default: 0 },
         bonusCoins: { type: Number, default: 0 },
         isActive: { type: Boolean, default: true },
+        appleProductId: { type: String, trim: true, default: "" },
+        googleSku: { type: String, trim: true, default: "" },
     },
     { timestamps: true }
 );

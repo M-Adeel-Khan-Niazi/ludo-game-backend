@@ -1,4 +1,5 @@
 const StripeService = require("../services/stripe.service");
+const IapService = require("../services/iap.service");
 const CoinPackage = require("../models/CoinPackage");
 const stripe = require("stripe")(require("../config/env").STRIPE_SECRET_KEY);
 const env = require("../config/env");
@@ -80,6 +81,45 @@ class PaymentController {
         } catch (error) {
             console.error("Webhook processing error:", error);
             res.status(500).json({ error: "Failed to process webhook" });
+        }
+    }
+
+    /**
+     * Verify an in-app purchase receipt from Apple/Google and credit coins.
+     * JWT-protected (user-facing). The server resolves the coin amount from the
+     * product id — the client never sends an amount.
+     *
+     * Body: { platform, provider, productId, transactionId, receipt }
+     */
+    async verifyIap(req, res) {
+        try {
+            const { platform, provider, productId, transactionId, receipt } = req.body;
+            const user = req.user;
+
+            if (!platform || !provider || !productId || !transactionId || !receipt) {
+                return res.status(400).json({
+                    success: false,
+                    message: "platform, provider, productId, transactionId and receipt are required",
+                });
+            }
+
+            const result = await IapService.fulfillIap(user, {
+                platform, provider, productId, transactionId, receipt,
+            });
+
+            return res.status(200).json({
+                success: true,
+                message: result.alreadyFulfilled
+                    ? "Purchase already fulfilled"
+                    : "Coins credited successfully",
+                data: result,
+            });
+        } catch (error) {
+            console.error("IAP verify error:", error);
+            return res.status(400).json({
+                success: false,
+                message: error.message || "Failed to verify IAP purchase",
+            });
         }
     }
 }

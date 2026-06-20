@@ -43,7 +43,7 @@ class TournamentService {
      */
     async getActiveTournaments() {
         let tournaments = await Tournament.find({ status: "REGISTRATION" })
-            .populate("players.userId", "_id fullName avatar playerStats")
+            .populate("players.userId", "_id fullName avatar playerStats isBot")
             .sort({ entryFee: 1 });
 
         if (tournaments.length === 0) {
@@ -398,7 +398,7 @@ class TournamentService {
      */
     async getTournament(tournamentId) {
         const tournament = await Tournament.findById(tournamentId)
-            .populate("players.userId", "_id fullName avatar playerStats")
+            .populate("players.userId", "_id fullName avatar playerStats isBot")
             .populate("winner", "_id fullName avatar")
             .populate("rounds.matches.matchId")
             .populate("rounds.matches.winner", "_id fullName avatar");

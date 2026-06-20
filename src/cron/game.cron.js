@@ -24,14 +24,56 @@ cron.schedule("*/5 * * * * *", async () => {
 
                 let changed = false;
                 const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
-                const activeCount = FRESH_MATCH.players.filter(p => p.status === 'ACTIVE').length;
+                const activeHumanCount = FRESH_MATCH.players.filter(p => p.status === 'ACTIVE' && !p.isBot).length;
+
+                // Check if all humans have left/been disqualified — auto-complete the match
+                // (DISCONNECTED is NOT included — players get a 2-minute grace period to reconnect)
+                const humanPlayers = FRESH_MATCH.players.filter(p => !p.isBot);
+                const allHumansLeftOrDisqualified = humanPlayers.length > 0 && humanPlayers.every(p => ['LEFT', 'DISQUALIFIED'].includes(p.status));
+                if (allHumansLeftOrDisqualified) {
+                    logger.info(`All humans left/disqualified from match ${FRESH_MATCH._id}. Auto-completing.`);
+                    const { clearTimer: clearT } = require('../services/timer.service');
+                    clearT(FRESH_MATCH._id.toString(), FRESH_MATCH.currentTurn ? FRESH_MATCH.currentTurn.turn : 0);
+                    const BotService = require('../services/bot.service');
+                    BotService.cancelPendingBotTurn(FRESH_MATCH._id);
+
+                    const winner = FRESH_MATCH.players.find(p => p.status === 'ACTIVE') || FRESH_MATCH.players.find(p => !['LEFT', 'DISQUALIFIED'].includes(p.status));
+                    if (winner) {
+                        const MatchService = require('../services/match.service');
+                        try {
+                            const result = await MatchService.settleGame(FRESH_MATCH, winner.userId);
+                            if (global.io) {
+                                const roomName = `game:${FRESH_MATCH._id.toString()}`;
+                                const payload = await GameLogic.getGameOverPayload(FRESH_MATCH._id.toString(), winner.userId, "ALL_HUMANS_LEFT", result.prize);
+                                global.io.to(roomName).emit("game:gameOver", payload);
+                                const populatedMatch = await Match.findById(FRESH_MATCH._id).populate({
+                                    path: "players.userId",
+                                    select: "_id fullName playerStats avatar isBot"
+                                }).populate({
+                                    path: "currentTurn.userId",
+                                    select: "_id fullName playerStats avatar isBot"
+                                });
+                                global.io.to(roomName).emit("game:state", populatedMatch);
+                            }
+                        } catch (e) {
+                            logger.error(`Error auto-completing match ${FRESH_MATCH._id}: ${e.message}`);
+                        }
+                    } else {
+                        FRESH_MATCH.state = 'ABANDONED';
+                        await FRESH_MATCH.save();
+                        BotService.cleanupBotUsers(FRESH_MATCH._id).catch(() => {});
+                    }
+                    changed = true;
+                    continue;
+                }
 
                 for (const player of FRESH_MATCH.players) {
                     if (player.status === 'DISCONNECTED' && player.disconnectedAt && new Date(player.disconnectedAt) < twoMinutesAgo) {
                         
-                        // [RULE] For 4P games, only kick if only 1 player remains active.
-                        // If 2 or more are active, we wait for the players to return or for the 1v1/2v2 threshold.
-                        if (FRESH_MATCH.gameType === '4P' && activeCount > 1) {
+                        // [RULE] For 4P games, only kick if only 1 human remains active.
+                        // If 2+ humans are active, we wait for them to return or for the 1v1/2v2 threshold.
+                        // Bots don't count — they're always ACTIVE and shouldn't block human disconnect timeouts.
+                        if (FRESH_MATCH.gameType === '4P' && activeHumanCount > 1) {
                             continue; 
                         }
 
@@ -66,6 +108,7 @@ cron.schedule("*/5 * * * * *", async () => {
                                     global.io.to(roomName).emit("game:playerLeft", { userId: player.userId, state: "COMPLETED" });
                                     const payload = await GameLogic.getGameOverPayload(FRESH_MATCH._id.toString(), result.winnerId, result.reason || "Opponent Timed Out", result.winnerAmount);
                                     global.io.to(roomName).emit("game:gameOver", payload);
+                                    BotService.cleanupBotUsers(FRESH_MATCH._id).catch(() => {});
 
                                 } else if (result.action === "PLAYER_LEFT_GAME") {
                                     const roomName = `game:${FRESH_MATCH._id.toString()}`;
@@ -110,6 +153,63 @@ cron.schedule("*/5 * * * * *", async () => {
         }
 
 
+        // --- Handle Stale WAITING Matches (when BOT_ENABLED is false) ---
+        const BotService = require('../services/bot.service');
+        if (!BotService.isEnabled()) {
+            const STALE_THRESHOLD_MS = 3 * 60 * 1000;
+            const staleCutoff = new Date(Date.now() - STALE_THRESHOLD_MS);
+            const staleMatches = await Match.find({
+                state: "WAITING",
+                isPrivate: false,
+                isVsBot: false,
+                tournamentId: { $exists: false },
+                createdAt: { $lt: staleCutoff }
+            });
+
+            for (const match of staleMatches) {
+                const lock = getMatchLock(match._id.toString());
+                const release = await lock.acquire();
+                try {
+                    const freshMatch = await Match.findById(match._id);
+                    if (!freshMatch || freshMatch.state !== "WAITING") continue;
+
+                    const WalletService = require('../services/wallet.service');
+                    for (const p of freshMatch.players) {
+                        if (p.isBot) continue;
+                        try {
+                            await WalletService.cancelGame(p.userId, freshMatch.joiningFee, freshMatch._id);
+                        } catch (err) {
+                            logger.error(`Error refunding player ${p.userId} on stale match cleanup:`, err.message);
+                        }
+                    }
+
+                    const botIds = freshMatch.players.filter(p => p.isBot).map(p => p.userId.toString());
+                    freshMatch.state = "CANCELLED";
+                    await freshMatch.save();
+                    await Match.findByIdAndDelete(freshMatch._id);
+
+                    if (global.io) {
+                        const roomName = `game:${freshMatch._id}`;
+                        global.io.to(roomName).emit("game:matchCancelled", {
+                            message: "Match cancelled — no opponents found"
+                        });
+                        setTimeout(() => {
+                            global.io.socketsLeave(roomName);
+                        }, 500);
+                    }
+
+                    BotService.cleanupBotUsers(freshMatch._id, botIds).catch(() => {});
+
+                    logger.info(`Cleaned up stale WAITING match ${freshMatch._id}`);
+                } catch (e) {
+                    logger.error(`Error cleaning up stale match ${match._id}:`, e.message);
+                } finally {
+                    release();
+                }
+            }
+        }
+
+
         // Find matches with expired turn deadlines
         const expiredMatches = await Match.find({
             state: "RUNNING",
@@ -126,6 +226,13 @@ cron.schedule("*/5 * * * * *", async () => {
 
                 // Double check deadline inside lock
                 if (FRESH_MATCH.currentTurn && FRESH_MATCH.currentTurn.turnDeadline && new Date(FRESH_MATCH.currentTurn.turnDeadline) < new Date()) {
+                    // Skip if the timer service already has an active timer for this turn
+                    const { isTimerRunning } = require('../services/timer.service');
+                    if (isTimerRunning(match._id.toString(), FRESH_MATCH.currentTurn.turn)) {
+                        logger.info(`Cron: Timer already running for match ${match._id}, turn ${FRESH_MATCH.currentTurn.turn}. Skipping.`);
+                        continue;
+                    }
+
                     logger.info(`Turn expired for match ${match._id}, switching turn.`);
 
                     // Switch Turn, passing global io instance
@@ -133,8 +240,6 @@ cron.schedule("*/5 * * * * *", async () => {
                         await GameLogic.switchTurn(global.io, FRESH_MATCH, logger);
                     } else {
                         logger.warn(`Cron: global.io not found, cannot emit socket event for match ${match._id}`);
-                        // Fallback to old logic maybe? Or just log. For now, just log.
-                        // The timer service should handle this anyway. This cron is a fallback.
                     }
                 }
             } catch (e) {

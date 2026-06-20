@@ -2,18 +2,46 @@ const Match = require("../models/Match");
 const User = require("../models/User");
 const { GameLogic } = require("./game.logic");
 const GameActionService = require("./gameAction.service");
-const { BOT_ENABLED, BOT_FILL_DELAY_MS, BOT_TURN_DELAY_MS } = require("../config/env");
+const { BOT_ENABLED, BOT_FILL_DELAY_MS, BOT_TURN_START_DELAY_MS, BOT_POST_ROLL_DELAY_MS, BOT_BONUS_TURN_DELAY_MS, BOT_CONTINUE_MOVE_DELAY_MS } = require("../config/env");
 const { getMatchLock } = require("../utils/lock");
 const logger = require("../config/logger");
 
+const BOT_NAMES = require("../data/botNames.json");
+
 const BOT_PROFILES = [
-    { userName: "ludo_bot_yellow", fullName: "Yellow Bot", color: "yellow" },
-    { userName: "ludo_bot_green", fullName: "Green Bot", color: "green" },
-    { userName: "ludo_bot_blue", fullName: "Blue Bot", color: "blue" },
+    { color: "yellow" },
+    { color: "green" },
+    { color: "blue" },
 ];
 
+const DIFFICULTY_NOISE = {
+    BRONZE: 80,
+    SILVER: 40,
+    GOLD: 10,
+    PLATINUM: 0,
+};
+
 const pendingFillTimers = new Map();
-const botUserCache = new Map();
+const pendingBotTurnTimers = new Map();
+
+function _generateFakeStats() {
+    return {
+        gamesPlayed: Math.floor(Math.random() * 200) + 50,
+        games4PWon: Math.floor(Math.random() * 40) + 10,
+        games2PWon: Math.floor(Math.random() * 30) + 5,
+        tournamentWon: Math.floor(Math.random() * 5),
+        totalCoinsEarned: Math.floor(Math.random() * 5000) + 500,
+        totalCoinsSpent: Math.floor(Math.random() * 3000) + 200,
+    };
+}
+
+function _pickUniqueName(usedNames) {
+    const available = BOT_NAMES.filter(n => !usedNames.has(n));
+    if (available.length === 0) {
+        return "Player" + Math.floor(Math.random() * 9999 + 1000);
+    }
+    return available[Math.floor(Math.random() * available.length)];
+}
 
 class BotService {
     isEnabled() {
@@ -25,6 +53,89 @@ class BotService {
         if (pendingFillTimers.has(key)) {
             clearTimeout(pendingFillTimers.get(key));
             pendingFillTimers.delete(key);
+        }
+    }
+
+    cancelPendingBotTurn(matchId) {
+        const key = matchId.toString();
+        if (pendingBotTurnTimers.has(key)) {
+            clearTimeout(pendingBotTurnTimers.get(key));
+            pendingBotTurnTimers.delete(key);
+        }
+    }
+
+    /**
+     * Fill a practice match with bots immediately.
+     * Bypasses BOT_ENABLED and BOT_FILL_DELAY — practice mode always works.
+     */
+    async fillPracticeBots(matchId) {
+        const lock = getMatchLock(matchId);
+        const release = await lock.acquire();
+
+        try {
+            const match = await Match.findById(matchId);
+            if (!match || match.state !== "WAITING" || !match.isVsBot) {
+                return null;
+            }
+
+            const humanPlayers = match.players.filter((p) => !p.isBot);
+            if (humanPlayers.length === 0) return null;
+
+            const slotsNeeded = match.maxPlayers - match.players.length;
+            if (slotsNeeded <= 0) return null;
+
+            await this.ensureBotUsers(match, slotsNeeded);
+
+            const usedColors = match.players.map((p) => p.color);
+            const allColors = ["red", "yellow", "green", "blue"];
+            const difficultyTier = match.difficultyTier || "BRONZE";
+
+            for (const color of allColors) {
+                if (match.players.length >= match.maxPlayers) break;
+                if (usedColors.includes(color)) continue;
+
+                const botUserId = await this.getBotUserIdForColor(color, difficultyTier);
+                if (!botUserId) continue;
+                if (match.players.some((p) => p.userId.toString() === botUserId.toString())) continue;
+
+                match.players.push(this._buildBotPlayer(color, botUserId, match));
+                usedColors.push(color);
+            }
+
+            this._startMatch(match);
+            await match.save();
+
+            const populatedMatch = await Match.findById(matchId)
+                .populate({ path: "players.userId", select: "_id fullName playerStats avatar isBot" })
+                .populate({ path: "currentTurn.userId", select: "_id fullName playerStats avatar isBot" });
+
+            if (global.io) {
+                const roomName = `game:${matchId}`;
+                const botsPayload = {
+                    matchId: matchId.toString(),
+                    message: "Practice match ready — playing against bots",
+                    botsAdded: match.players.filter((p) => p.isBot).length,
+                    state: match.state,
+                };
+                global.io.to(roomName).emit("game:botsJoined", botsPayload);
+                for (const p of match.players) {
+                    if (!p.isBot) {
+                        global.io.to(`user:${p.userId}`).emit("game:botsJoined", botsPayload);
+                    }
+                }
+                global.io.to(roomName).emit("game:state", populatedMatch);
+
+                if (match.state === "RUNNING") {
+                    const { startTimer } = require("./timer.service");
+                    startTimer(global.io, populatedMatch, populatedMatch.currentTurn.turn);
+                    this.onTurnChanged(global.io, matchId);
+                }
+            }
+
+            logger.info(`[Bot] Practice match ${matchId} started — ${match.players.length}/${match.maxPlayers} players (tier: ${difficultyTier})`);
+            return populatedMatch;
+        } finally {
+            release();
         }
     }
 
@@ -42,45 +153,54 @@ class BotService {
         pendingFillTimers.set(matchId.toString(), timer);
     }
 
-    async ensureBotUsers() {
-        if (botUserCache.size >= BOT_PROFILES.length) return;
+    async ensureBotUsers(match, slotsNeeded) {
+        const playerIds = match.players.map(p => p.userId);
+        const existingUsers = await User.find({ _id: { $in: playerIds } }).select("fullName isBot");
+        const usedNames = new Set(existingUsers.map(u => u.fullName).filter(Boolean));
 
-        for (const profile of BOT_PROFILES) {
-            if (botUserCache.has(profile.color)) continue;
+        const needed = Math.min(slotsNeeded || BOT_PROFILES.length, BOT_PROFILES.length);
+        const profilesToEnsure = BOT_PROFILES.slice(0, needed);
+
+        for (const profile of profilesToEnsure) {
+            const chosenName = _pickUniqueName(usedNames);
+            usedNames.add(chosenName);
+
+            const userName = `ludo_bot_${profile.color}_${match.difficultyTier || "BRONZE"}`;
+            const fakeStats = _generateFakeStats();
 
             let user;
             try {
                 user = await User.findOneAndUpdate(
-                    { userName: profile.userName },
+                    { userName },
                     {
                         $setOnInsert: {
-                            userName: profile.userName,
-                            fullName: profile.fullName,
-                            isBot: true,
+                            userName,
                             isVerified: true,
                             isProfileCompleted: true,
-                            email: `${profile.userName}@bots.local`,
-                            avatar: null,
+                            email: `${userName}@bots.local`,
                         },
-                        $set: { isBot: true },
+                        $set: {
+                            isBot: true,
+                            fullName: chosenName,
+                            avatar: String(Math.floor(Math.random() * 20) + 1),
+                            playerStats: fakeStats,
+                        },
                     },
                     { new: true, upsert: true, setDefaultsOnInsert: true }
                 );
             } catch (err) {
                 if (err?.code !== 11000) throw err;
-                user = await User.findOne({ userName: profile.userName });
+                user = await User.findOne({ userName });
             }
 
-            if (!user) throw new Error(`Unable to create or load bot user ${profile.userName}`);
-            botUserCache.set(profile.color, user._id);
+            if (!user) throw new Error(`Unable to create or load bot user ${userName}`);
         }
     }
 
-    async getBotUserIdForColor(color) {
-        await this.ensureBotUsers();
-        const id = botUserCache.get(color);
-        if (!id) throw new Error(`No bot configured for color ${color}`);
-        return id;
+    async getBotUserIdForColor(color, difficultyTier) {
+        const userName = `ludo_bot_${color}_${difficultyTier || "BRONZE"}`;
+        const user = await User.findOne({ userName });
+        return user ? user._id : null;
     }
 
     _buildBotPlayer(color, botUserId, match) {
@@ -136,7 +256,7 @@ class BotService {
             diceValues: [],
             usedDiceIndices: [],
             rollCount: 0,
-            pendingBonus: false,
+            pendingBonus: 0,
             rollingPhase: true,
             turn: 1,
             turnDeadline: new Date(Date.now() + 15000),
@@ -150,70 +270,72 @@ class BotService {
         const release = await lock.acquire();
 
         try {
-        const match = await Match.findById(matchId);
-        if (!match || match.state !== "WAITING" || match.isPrivate || match.tournamentId || match.isVsBot) {
-            return null;
-        }
+            const match = await Match.findById(matchId);
+            if (!match || match.state !== "WAITING" || match.isPrivate || match.tournamentId || match.isVsBot) {
+                return null;
+            }
 
-        const humanPlayers = match.players.filter((p) => !p.isBot);
-        if (humanPlayers.length === 0) return null;
+            const humanPlayers = match.players.filter((p) => !p.isBot);
+            if (humanPlayers.length === 0) return null;
 
-        const slotsNeeded = match.maxPlayers - match.players.length;
-        if (slotsNeeded <= 0) return null;
+            const slotsNeeded = match.maxPlayers - match.players.length;
+            if (slotsNeeded <= 0) return null;
 
-        await this.ensureBotUsers();
+            await this.ensureBotUsers(match, slotsNeeded);
 
-        const usedColors = match.players.map((p) => p.color);
-        const allColors = ["red", "yellow", "green", "blue"];
+            const usedColors = match.players.map((p) => p.color);
+            const allColors = ["red", "yellow", "green", "blue"];
+            const difficultyTier = match.difficultyTier || "BRONZE";
 
-        for (const color of allColors) {
-            if (match.players.length >= match.maxPlayers) break;
-            if (usedColors.includes(color)) continue;
+            for (const color of allColors) {
+                if (match.players.length >= match.maxPlayers) break;
+                if (usedColors.includes(color)) continue;
 
-            const botUserId = await this.getBotUserIdForColor(color);
-            if (match.players.some((p) => p.userId.toString() === botUserId.toString())) continue;
+                const botUserId = await this.getBotUserIdForColor(color, difficultyTier);
+                if (!botUserId) continue;
+                if (match.players.some((p) => p.userId.toString() === botUserId.toString())) continue;
 
-            match.players.push(this._buildBotPlayer(color, botUserId, match));
-            usedColors.push(color);
-        }
+                match.players.push(this._buildBotPlayer(color, botUserId, match));
+                usedColors.push(color);
+            }
 
-        match.isVsBot = true;
+            match.isVsBot = true;
 
-        if (this._canStartMatch(match)) {
-            this._startMatch(match);
-        }
+            if (this._canStartMatch(match)) {
+                this._startMatch(match);
+            }
 
-        await match.save();
+            await match.save();
 
-        const populatedMatch = await Match.findById(matchId)
-            .populate({ path: "players.userId", select: "_id fullName playerStats avatar isBot" })
-            .populate({ path: "currentTurn.userId", select: "_id fullName playerStats avatar isBot" });
+            const populatedMatch = await Match.findById(matchId)
+                .populate({ path: "players.userId", select: "_id fullName playerStats avatar isBot" })
+                .populate({ path: "currentTurn.userId", select: "_id fullName playerStats avatar isBot" });
 
-        if (global.io) {
-            const roomName = `game:${matchId}`;
-            const botsPayload = {
-                matchId: matchId.toString(),
-                message: "Opponent bots joined the match",
-                botsAdded: match.players.filter((p) => p.isBot).length,
-                state: match.state,
-            };
-            global.io.to(roomName).emit("game:botsJoined", botsPayload);
-            for (const p of match.players) {
-                if (!p.isBot) {
-                    global.io.to(`user:${p.userId}`).emit("game:botsJoined", botsPayload);
+            if (global.io) {
+                const roomName = `game:${matchId}`;
+                const botsPayload = {
+                    matchId: matchId.toString(),
+                    message: "Opponent bots joined the match",
+                    botsAdded: match.players.filter((p) => p.isBot).length,
+                    state: match.state,
+                };
+                global.io.to(roomName).emit("game:botsJoined", botsPayload);
+                for (const p of match.players) {
+                    if (!p.isBot) {
+                        global.io.to(`user:${p.userId}`).emit("game:botsJoined", botsPayload);
+                    }
+                }
+                global.io.to(roomName).emit("game:state", populatedMatch);
+
+                if (match.state === "RUNNING") {
+                    const { startTimer } = require("./timer.service");
+                    startTimer(global.io, populatedMatch, populatedMatch.currentTurn.turn);
+                    this.onTurnChanged(global.io, matchId);
                 }
             }
-            global.io.to(roomName).emit("game:state", populatedMatch);
 
-            if (match.state === "RUNNING") {
-                const { startTimer } = require("./timer.service");
-                startTimer(global.io, populatedMatch, populatedMatch.currentTurn.turn);
-                this.onTurnChanged(global.io, matchId);
-            }
-        }
-
-        logger.info(`[Bot] Filled match ${matchId} - ${match.players.length}/${match.maxPlayers} players`);
-        return populatedMatch;
+            logger.info(`[Bot] Filled match ${matchId} - ${match.players.length}/${match.maxPlayers} players (tier: ${difficultyTier})`);
+            return populatedMatch;
         } finally {
             release();
         }
@@ -233,19 +355,137 @@ class BotService {
     onTurnChanged(io, matchId) {
         if (!io || !this.isEnabled()) return;
 
-        setTimeout(async () => {
+        this.cancelPendingBotTurn(matchId);
+
+        const timer = setTimeout(async () => {
+            pendingBotTurnTimers.delete(matchId.toString());
             try {
-                const match = await Match.findById(matchId);
-                if (!match || match.state !== "RUNNING") return;
-                if (!this.isCurrentTurnBot(match)) return;
-                await this.playBotTurn(io, matchId);
+                await this._executeBotTurn(io, matchId);
             } catch (err) {
-                logger.error(`[Bot] playBotTurn error match ${matchId}:`, err);
+                logger.error(`[Bot] _executeBotTurn error for ${matchId}:`, err);
             }
-        }, BOT_TURN_DELAY_MS);
+        }, BOT_TURN_START_DELAY_MS);
+
+        pendingBotTurnTimers.set(matchId.toString(), timer);
+    }
+
+    _scheduleBotAction(io, matchId, delay, phase) {
+        this.cancelPendingBotTurn(matchId);
+
+        const timer = setTimeout(async () => {
+            pendingBotTurnTimers.delete(matchId.toString());
+            try {
+                await this._playBotTurnPhase(io, matchId, phase);
+            } catch (err) {
+                logger.error(`[Bot] scheduled ${phase} action error for ${matchId}:`, err);
+            }
+        }, delay);
+
+        pendingBotTurnTimers.set(matchId.toString(), timer);
+    }
+
+    async _executeBotTurn(io, matchId) {
+        const match = await Match.findById(matchId);
+        if (!match || match.state !== "RUNNING") return;
+        if (!this.isCurrentTurnBot(match)) return;
+
+        const phase = match.currentTurn.rollingPhase ? "roll" : "move";
+        await this._playBotTurnPhase(io, matchId, phase);
+    }
+
+    async _playBotTurnPhase(io, matchId, phase) {
+        if (phase === "roll") {
+            const match = await Match.findById(matchId);
+            if (!match || match.state !== "RUNNING") return;
+            if (!this.isCurrentTurnBot(match)) return;
+
+            let rollResult;
+            try {
+                rollResult = await GameActionService.rollDice(io, matchId, match.currentTurn.userId);
+            } catch (err) {
+                if (err.message === "Not your turn" || err.message === "Game not running") return;
+                logger.error(`[Bot] rollDice error for ${matchId}:`, err.message);
+                return;
+            }
+
+            if (rollResult.canRollAgain) {
+                this._scheduleBotAction(io, matchId, BOT_BONUS_TURN_DELAY_MS, "roll");
+                return;
+            }
+
+            if (!rollResult.hasValidMoves) {
+                return;
+            }
+
+            if (rollResult.switchedTurn) {
+                return;
+            }
+
+            this._scheduleBotAction(io, matchId, BOT_POST_ROLL_DELAY_MS, "move");
+            return;
+        }
+
+        if (phase === "move") {
+            const match = await Match.findById(matchId);
+            if (!match || match.state !== "RUNNING") return;
+            if (!this.isCurrentTurnBot(match)) return;
+            if (match.currentTurn.rollingPhase) {
+                this._scheduleBotAction(io, matchId, BOT_TURN_START_DELAY_MS, "roll");
+                return;
+            }
+
+            const player = match.players.find(
+                (p) => p.userId.toString() === match.currentTurn.userId.toString()
+            );
+            if (!player) return;
+
+            const move = this._pickBestMove(match, player);
+
+            if (!move) {
+                logger.warn(`[Bot] No valid moves for bot in match ${matchId}`);
+                return;
+            }
+
+            let moveResult;
+            try {
+                moveResult = await GameActionService.moveToken(
+                    io, matchId, match.currentTurn.userId, move.tokenId, move.diceIndex
+                );
+            } catch (err) {
+                if (err.message === "Not your turn" || err.message === "Game not running") return;
+                logger.error(`[Bot] moveToken error for ${matchId}:`, err.message);
+                return;
+            }
+
+            if (moveResult.gameOver) return;
+
+            if (moveResult.bonusTurn) {
+                this._scheduleBotAction(io, matchId, BOT_BONUS_TURN_DELAY_MS, "roll");
+                return;
+            }
+
+            if (moveResult.continueMove) {
+                this._scheduleBotAction(io, matchId, BOT_CONTINUE_MOVE_DELAY_MS, "move");
+                return;
+            }
+
+            if (moveResult.switchedTurn) {
+                const afterMove = await Match.findById(matchId);
+                if (afterMove && afterMove.state === "RUNNING" && this.isCurrentTurnBot(afterMove)) {
+                    this.onTurnChanged(io, matchId);
+                }
+                return;
+            }
+
+            const afterMove = await Match.findById(matchId);
+            if (afterMove && afterMove.state === "RUNNING" && this.isCurrentTurnBot(afterMove)) {
+                this.onTurnChanged(io, matchId);
+            }
+        }
     }
 
     _scoreMove(match, player, token, diceIndex) {
+        const difficultyTier = (match.difficultyTier || "BRONZE").toUpperCase();
         const isCombinedDice = diceIndex === GameLogic.COMBINED_DICE_INDEX;
         const diceValue = isCombinedDice
             ? GameLogic.getCombinedDiceValue(match, GameLogic.getUnusedDiceIndices(match))
@@ -260,6 +500,9 @@ class BotService {
         if (potentialPos === 57) score += 80;
         if (token.position === GameLogic.STATE_HOME && diceValue === 6) score += 50;
         if (potentialPos > token.position && token.position >= 0) score += potentialPos;
+
+        const noise = DIFFICULTY_NOISE[difficultyTier] || DIFFICULTY_NOISE.BRONZE;
+        score += Math.random() * noise;
 
         return score;
     }
@@ -291,57 +534,48 @@ class BotService {
         return best;
     }
 
-    async playBotTurn(io, matchId) {
-        const match = await Match.findById(matchId);
-        if (!match || match.state !== "RUNNING") return;
-        if (!this.isCurrentTurnBot(match)) return;
+    async cleanupBotUsers(matchId, preloadedBotIds) {
+        try {
+            let botPlayerIds = preloadedBotIds;
 
-        const botUserId = match.currentTurn.userId;
+            if (!botPlayerIds) {
+                const match = await Match.findById(matchId);
+                if (!match) return;
 
-        if (match.currentTurn.rollingPhase) {
-            const rollResult = await GameActionService.rollDice(io, matchId, botUserId);
-
-            if (rollResult.canRollAgain) {
-                return this.playBotTurn(io, matchId);
+                botPlayerIds = match.players
+                    .filter(p => p.isBot)
+                    .map(p => p.userId.toString());
             }
-            if (rollResult.switchedTurn || rollResult.gameOver) return;
 
-            const freshMatch = await Match.findById(matchId);
-            if (!freshMatch || !this.isCurrentTurnBot(freshMatch)) return;
-            if (freshMatch.currentTurn.rollingPhase) return;
+            if (!botPlayerIds || botPlayerIds.length === 0) return;
 
-            return this.playBotTurn(io, matchId);
-        }
+            const activeMatches = await Match.find({
+                _id: { $ne: matchId },
+                state: { $in: ["RUNNING", "WAITING"] },
+                "players.userId": { $in: botPlayerIds }
+            });
 
-        const freshMatch = await Match.findById(matchId);
-        if (!freshMatch || !this.isCurrentTurnBot(freshMatch)) return;
-
-        const player = freshMatch.players.find(
-            (p) => p.userId.toString() === botUserId.toString()
-        );
-        const move = this._pickBestMove(freshMatch, player);
-        if (!move) {
-            await GameLogic.switchTurn(io, freshMatch, logger);
-            return;
-        }
-
-        const moveResult = await GameActionService.moveToken(
-            io,
-            matchId,
-            botUserId,
-            move.tokenId,
-            move.diceIndex
-        );
-
-        if (moveResult.gameOver) return;
-
-        const afterMove = await Match.findById(matchId);
-        if (!afterMove || afterMove.state !== "RUNNING") return;
-
-        if (this.isCurrentTurnBot(afterMove)) {
-            if (afterMove.currentTurn.rollingPhase || moveResult.continueMove || moveResult.bonusTurn) {
-                return this.playBotTurn(io, matchId);
+            const activeBotIds = new Set();
+            for (const activeMatch of activeMatches) {
+                for (const p of activeMatch.players) {
+                    if (p.isBot) {
+                        activeBotIds.add(p.userId.toString());
+                    }
+                }
             }
+
+            const botsToDelete = botPlayerIds.filter(id => !activeBotIds.has(id));
+
+            if (botsToDelete.length > 0) {
+                const User = require("../models/User");
+                await User.deleteMany({
+                    _id: { $in: botsToDelete },
+                    isBot: true
+                });
+                logger.info(`[Bot] Cleaned up ${botsToDelete.length} bot user(s) from completed match ${matchId}`);
+            }
+        } catch (err) {
+            logger.error(`[Bot] cleanupBotUsers error for match ${matchId}:`, err.message);
         }
     }
 }

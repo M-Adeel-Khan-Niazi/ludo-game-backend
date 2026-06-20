@@ -49,6 +49,7 @@ class GameActionService {
                 match.currentTurn.rollCount++;
 
                 if (match.currentTurn.rollCount >= 3) {
+                    match.currentTurn.turnDeadline = new Date(Date.now() + 2000);
                     await match.save();
                     io.to(roomName).emit("game:diceRolled", {
                         userId,
@@ -58,7 +59,7 @@ class GameActionService {
                         canRollAgain: false,
                         turnDeadline: match.currentTurn.turnDeadline,
                     });
-                    await GameLogic.switchTurn(io, match, logger);
+                    startTimer(io, match, match.currentTurn.turn);
                     return { match, switchedTurn: true };
                 }
 
@@ -80,6 +81,7 @@ class GameActionService {
             const hasValidMoves = GameLogic.hasAnyValidMove(match, player);
 
             if (!hasValidMoves) {
+                match.currentTurn.turnDeadline = new Date(Date.now() + 2000);
                 await match.save();
                 io.to(roomName).emit("game:diceRolled", {
                     userId,
@@ -89,8 +91,8 @@ class GameActionService {
                     canRollAgain: false,
                     turnDeadline: match.currentTurn.turnDeadline,
                 });
-                await GameLogic.switchTurn(io, match, logger);
-                return { match, switchedTurn: true };
+                startTimer(io, match, match.currentTurn.turn);
+                return { match, hasValidMoves: false };
             }
 
             let captureWarning = null;
@@ -178,7 +180,16 @@ class GameActionService {
             });
 
             if (result.winnerId) {
-                const { prize } = await MatchService.settleGame(match, result.winnerId);
+                let prize = 0;
+                try {
+                    const settled = await MatchService.settleGame(match, result.winnerId);
+                    prize = settled.prize;
+                } catch (settleErr) {
+                    logger.error(`settleGame failed on natural win for match ${matchId}:`, settleErr);
+                    match.state = "COMPLETED";
+                    match.winner = result.winnerId;
+                    await match.save();
+                }
                 const payload = await GameLogic.getGameOverPayload(
                     matchId,
                     result.winnerId,
@@ -257,7 +268,22 @@ class GameActionService {
                 return { match, bonusTurn: true };
             }
 
-            await GameLogic.switchTurn(io, match, logger);
+            try {
+                await GameLogic.switchTurn(io, match, logger);
+            } catch (switchErr) {
+                logger.error(`switchTurn failed after moveToken in match ${matchId}:`, switchErr);
+                try {
+                    const freshMatch = await Match.findById(matchId);
+                    if (freshMatch && freshMatch.state === "RUNNING" && freshMatch.currentTurn) {
+                        freshMatch.currentTurn.turnDeadline = new Date(Date.now() + 3000);
+                        await freshMatch.save();
+                        startTimer(io, freshMatch, freshMatch.currentTurn.turn);
+                        logger.info(`Fallback timer started for match ${matchId} after switchTurn failure`);
+                    }
+                } catch (fallbackErr) {
+                    logger.error(`Fallback timer also failed for match ${matchId}:`, fallbackErr);
+                }
+            }
             return { match, switchedTurn: true };
         } finally {
             release();

@@ -47,7 +47,7 @@ class AdminUserService {
     async getUserMatches(userId) {
         const matches = await Match.find({
             "players.userId": userId
-        }).populate("players.userId", "_id fullName avatar");
+        }).populate("players.userId", "_id fullName avatar isBot");
         return matches;
     }
 
