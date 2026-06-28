@@ -46,6 +46,25 @@ class GameActionService {
             const isDoubleSix = latestRoll[0] === 6 && latestRoll[1] === 6;
 
             if (isDoubleSix) {
+                const hasValidMoves = GameLogic.hasAnyValidMove(match, player);
+
+                if (!hasValidMoves) {
+                    match.currentTurn.rollingPhase = false;
+                    match.currentTurn.turnDeadline = new Date(Date.now() + 2000);
+                    await match.save();
+                    io.to(roomName).emit("game:diceRolled", {
+                        userId,
+                        diceValues: match.currentTurn.diceValues,
+                        latestRoll,
+                        hasValidMoves: false,
+                        canRollAgain: false,
+                        reason: "no_valid_moves",
+                        turnDeadline: match.currentTurn.turnDeadline,
+                    });
+                    startTimer(io, match, match.currentTurn.turn);
+                    return { match, hasValidMoves: false };
+                }
+
                 match.currentTurn.rollCount++;
 
                 if (match.currentTurn.rollCount >= 3) {
@@ -57,6 +76,7 @@ class GameActionService {
                         latestRoll,
                         hasValidMoves: false,
                         canRollAgain: false,
+                        reason: "three_double_sixes",
                         turnDeadline: match.currentTurn.turnDeadline,
                     });
                     startTimer(io, match, match.currentTurn.turn);
@@ -89,6 +109,7 @@ class GameActionService {
                     latestRoll,
                     hasValidMoves: false,
                     canRollAgain: false,
+                    reason: "no_valid_moves",
                     turnDeadline: match.currentTurn.turnDeadline,
                 });
                 startTimer(io, match, match.currentTurn.turn);
