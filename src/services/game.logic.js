@@ -4,7 +4,6 @@ class GameLogic {
         this.PATH_LENGTH = 52; // Main board path steps (0-51)
         this.HOME_PATH_LENGTH = 6; // Steps to reach home center (52-57)
         this.TOTAL_STEPS = this.PATH_LENGTH + this.HOME_PATH_LENGTH; // 58 steps total
-        this.PRE_HOME_STOP = 50; // Last allowed stop before home path without a capture
 
         // Token States
         this.STATE_HOME = -1; // In base
@@ -37,14 +36,15 @@ class GameLogic {
     getDiceCount(player) {
         if (!player || !player.tokens) return 2;
 
+        const finishedTokens = player.tokens.filter(t => t.isFinished);
         const activeTokens = player.tokens.filter(t => !t.isFinished);
 
-        // Endgame rule: roll one die when all unfinished tokens are already in the home path.
-        if (
-            activeTokens.length > 0 &&
-            activeTokens.every(t => t.position >= 52 && t.position <= 56)
-        ) {
-            return 1;
+        // Rule: Only one dice if only 1 token left, it's in home path, and rest finished
+        if (finishedTokens.length === 3 && activeTokens.length === 1) {
+            const lastToken = activeTokens[0];
+            if (lastToken.position >= 52 && lastToken.position <= 57) {
+                return 1;
+            }
         }
         return 2;
     }
@@ -91,18 +91,15 @@ class GameLogic {
         }
         let nextPos = token.position + diceValue;
         if (hasCaptured) {
-            if (nextPos > this.PRE_HOME_STOP && token.position <= this.PRE_HOME_STOP) {
+            if (nextPos > 50 && token.position <= 50) {
                 nextPos += 1;
             }
             if (nextPos > 57) {
                 return -1;
             }
         } else {
-            if (token.position >= this.PRE_HOME_STOP) {
-                return -1;
-            }
-            if (nextPos > this.PRE_HOME_STOP) {
-                nextPos = this.PRE_HOME_STOP;
+            if (nextPos > 51) {
+                nextPos = nextPos % 52;
             }
         }
         return nextPos;
@@ -325,8 +322,6 @@ class GameLogic {
         if (token.position === this.STATE_HOME && diceValue === 6) {
             return false; // Safe exit
         }
-
-        if (!this.isValidMove(token, diceValue, player, match)) return false;
 
         const potentialPos = this.getNextPosition(token, diceValue, player.hasCaptured);
         if (potentialPos > 51) return false; // In safe zone/home path
