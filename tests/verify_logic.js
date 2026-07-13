@@ -31,31 +31,41 @@ const match = {
 async function testWrapAround() {
     console.log("Testing Wrap Around Logic...");
     const token = player1.tokens[0];
-    token.position = 50; // Red Home Entry is 50?
-    // Red Start 0. Path 0..51.
-    // 50 + 2 = 52 -> 0.
 
-    // Case 1: No Capture -> Should wrap to 0
+    // Case 1: No Capture -> 50 + 2 should be invalid (cannot wrap around)
+    token.position = 50;
     player1.hasCaptured = false;
-    const isValid = GameLogic.isValidMove(token, 2, player1, match);
-    console.log(`isValid(50+2, !captured): ${isValid}`); // Expected: true
+    const isValidInvalidRoll = GameLogic.isValidMove(token, 2, player1, match);
+    console.log(`isValid(50+2, !captured): ${isValidInvalidRoll}`); // Expected: false
 
-    // Simulate apply move logic for position
-    let nextPos = 50 + 2;
-    if (nextPos > 51) {
-        if (!player1.hasCaptured) nextPos = nextPos % 52;
-    }
-    console.log(`Next Pos (expected 0): ${nextPos}`);
+    const nextPosInvalidRoll = GameLogic.getNextPosition(token, 2, player1.hasCaptured);
+    console.log(`Next Pos (expected -1): ${nextPosInvalidRoll}`); // Expected: -1
 
-    // Case 2: Captured -> Should Enter Home
+    // Case 2: No Capture -> 50 + 1 should go to 51 (valid, last stop of home path)
+    const isValidValidRoll = GameLogic.isValidMove(token, 1, player1, match);
+    console.log(`isValid(50+1, !captured): ${isValidValidRoll}`); // Expected: true
+
+    const nextPosValidRoll = GameLogic.getNextPosition(token, 1, player1.hasCaptured);
+    console.log(`Next Pos (expected 51): ${nextPosValidRoll}`); // Expected: 51
+
+    // Case 3: No Capture -> 51 + 1 should be invalid (cannot wrap around from last stop)
+    token.position = 51;
+    const isValidFromLastStop = GameLogic.isValidMove(token, 1, player1, match);
+    console.log(`isValid(51+1, !captured): ${isValidFromLastStop}`); // Expected: false
+
+    const nextPosFromLastStop = GameLogic.getNextPosition(token, 1, player1.hasCaptured);
+    console.log(`Next Pos (expected -1): ${nextPosFromLastStop}`); // Expected: -1
+
+    // Case 4: Captured -> Should Enter Home (50 + 2 -> 53)
+    token.position = 50;
     player1.hasCaptured = true;
-    nextPos = 50 + 2; // 52
-    if (nextPos > 51 && player1.hasCaptured) {
-        // Enter Home
-    }
-    console.log(`Next Pos (expected 52): ${nextPos}`);
+    const isValidCaptured = GameLogic.isValidMove(token, 2, player1, match);
+    console.log(`isValid(50+2, captured): ${isValidCaptured}`); // Expected: true
 
-    // Case 3: Over-shot Home
+    const nextPosCaptured = GameLogic.getNextPosition(token, 2, player1.hasCaptured);
+    console.log(`Next Pos (expected 53): ${nextPosCaptured}`); // Expected: 53
+
+    // Case 5: Over-shot Home
     token.position = 56; // One to win
     // Need 1 to go to 57.
     // Roll 2 -> 58 -> Invalid.

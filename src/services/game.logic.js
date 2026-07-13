@@ -102,7 +102,7 @@ class GameLogic {
             }
         } else {
             if (nextPos > 51) {
-                nextPos = nextPos % 52;
+                return -1;
             }
         }
         return nextPos;
