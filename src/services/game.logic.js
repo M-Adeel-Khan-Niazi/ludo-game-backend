@@ -36,17 +36,20 @@ class GameLogic {
     getDiceCount(player) {
         if (!player || !player.tokens) return 2;
 
-        const finishedTokens = player.tokens.filter(t => t.isFinished);
-        const activeTokens = player.tokens.filter(t => !t.isFinished);
+        const unfinishedTokens = player.tokens.filter(t => !t.isFinished);
 
-        // Rule: Only one dice if only 1 token left, it's in home path, and rest finished
-        if (finishedTokens.length === 3 && activeTokens.length === 1) {
-            const lastToken = activeTokens[0];
-            if (lastToken.position >= 52 && lastToken.position <= 57) {
-                return 1;
-            }
+        // Rule: Once every unfinished token is in the home path, roll one die.
+        if (
+            unfinishedTokens.length > 0 &&
+            unfinishedTokens.every(t => this.isInHomePath(t))
+        ) {
+            return 1;
         }
         return 2;
+    }
+
+    isInHomePath(token) {
+        return !!token && token.position >= this.PATH_LENGTH && token.position < this.TOTAL_STEPS;
     }
 
     
