@@ -144,76 +144,76 @@ class MatchService {
         const release = await lock.acquire();
 
         try {
-        const match = await Match.findById(matchId);
-        if (!match) throw new Error("Match not found");
-        if (match.state !== "WAITING") throw new Error("Match is not available to join");
-        if (match.players.length >= match.maxPlayers) throw new Error("Match is full");
-        if (match.players.some(p => p.userId.toString() === userId.toString())) throw new Error("Already joined");
+            const match = await Match.findById(matchId);
+            if (!match) throw new Error("Match not found");
+            if (match.state !== "WAITING") throw new Error("Match is not available to join");
+            if (match.players.length >= match.maxPlayers) throw new Error("Match is full");
+            if (match.players.some(p => p.userId.toString() === userId.toString())) throw new Error("Already joined");
 
-        const BotService = require("./bot.service");
-        BotService.cancelScheduledFill(match._id);
-
-        // Reschedule bot fill if room is still not full after a real player joins
-        if (match.players.length < match.maxPlayers && !match.isPrivate) {
-            BotService.scheduleFill(match._id);
-        }
-
-        // Lock coins
-        await WalletService.joinGame(userId, match.joiningFee, match._id);
-
-        // Determine color/position
-        const usedColors = match.players.map(p => p.color);
-        // Diagonal-first fill order: Red -> Yellow -> Green -> Blue
-        const allColors = ["red", "yellow", "green", "blue"];
-        const nextColor = allColors.find(c => !usedColors.includes(c));
-
-        match.players.push({
-            userId,
-            color: nextColor, 
-            status: "ACTIVE",
-            team: match.gameType === "2V2" ? (match.players.length % 2 === 0 ? 1 : 2) : null,
-            isHost: false,
-            tokens: [
-                { tokenId: `${nextColor[0].toUpperCase()}1`, position: -1, isFinished: false },
-                { tokenId: `${nextColor[0].toUpperCase()}2`, position: -1, isFinished: false },
-                { tokenId: `${nextColor[0].toUpperCase()}3`, position: -1, isFinished: false },
-                { tokenId: `${nextColor[0].toUpperCase()}4`, position: -1, isFinished: false }
-            ]
-        });
-
-        // Check if full (Private matches must be manually started)
-        if (match.players.length === match.maxPlayers && !match.isPrivate) {
-            match.state = "RUNNING"; // Ready to start
-
-            // Initialize Turn (Red goes first usually)
-            const firstPlayer = match.players.find(p => p.color === "red") || match.players[0];
-            match.currentTurn = {
-                userId: firstPlayer.userId,
-                color: firstPlayer.color,
-                diceValues: [],
-                usedDiceIndices: [],
-                rollCount: 0,
-                turn: 1, // Initialize turn number
-                turnDeadline: new Date(Date.now() + 15000)
-            };
-        }
-
-        await match.save();
-        if (match.state === "RUNNING" && global.io) {
             const BotService = require("./bot.service");
-            BotService.onTurnChanged(global.io, match._id);
-        }
-        const populatedMatch = await Match.findById(match._id)
-            .populate({
-                path: "players.userId",
-                select: "_id fullName playerStats avatar isBot"
-            })
-            .populate({
-                path: "currentTurn.userId",
-                select: "_id fullName playerStats avatar isBot"
+            BotService.cancelScheduledFill(match._id);
+
+            // Reschedule bot fill if room is still not full after a real player joins
+            if (match.players.length < match.maxPlayers && !match.isPrivate) {
+                BotService.scheduleFill(match._id);
+            }
+
+            // Lock coins
+            await WalletService.joinGame(userId, match.joiningFee, match._id);
+
+            // Determine color/position
+            const usedColors = match.players.map(p => p.color);
+            // Diagonal-first fill order: Red -> Yellow -> Green -> Blue
+            const allColors = ["red", "yellow", "green", "blue"];
+            const nextColor = allColors.find(c => !usedColors.includes(c));
+
+            match.players.push({
+                userId,
+                color: nextColor,
+                status: "ACTIVE",
+                team: match.gameType === "2V2" ? (match.players.length % 2 === 0 ? 1 : 2) : null,
+                isHost: false,
+                tokens: [
+                    { tokenId: `${nextColor[0].toUpperCase()}1`, position: -1, isFinished: false },
+                    { tokenId: `${nextColor[0].toUpperCase()}2`, position: -1, isFinished: false },
+                    { tokenId: `${nextColor[0].toUpperCase()}3`, position: -1, isFinished: false },
+                    { tokenId: `${nextColor[0].toUpperCase()}4`, position: -1, isFinished: false }
+                ]
             });
 
-        return populatedMatch;
+            // Check if full (Private matches must be manually started)
+            if (match.players.length === match.maxPlayers && !match.isPrivate) {
+                match.state = "RUNNING"; // Ready to start
+
+                // Initialize Turn (Red goes first usually)
+                const firstPlayer = match.players.find(p => p.color === "red") || match.players[0];
+                match.currentTurn = {
+                    userId: firstPlayer.userId,
+                    color: firstPlayer.color,
+                    diceValues: [],
+                    usedDiceIndices: [],
+                    rollCount: 0,
+                    turn: 1, // Initialize turn number
+                    turnDeadline: new Date(Date.now() + 60000)
+                };
+            }
+
+            await match.save();
+            if (match.state === "RUNNING" && global.io) {
+                const BotService = require("./bot.service");
+                BotService.onTurnChanged(global.io, match._id);
+            }
+            const populatedMatch = await Match.findById(match._id)
+                .populate({
+                    path: "players.userId",
+                    select: "_id fullName playerStats avatar isBot"
+                })
+                .populate({
+                    path: "currentTurn.userId",
+                    select: "_id fullName playerStats avatar isBot"
+                });
+
+            return populatedMatch;
         } finally {
             release();
         }
@@ -604,14 +604,14 @@ class MatchService {
             state: { $in: ["WAITING", "RUNNING"] },
             "players.userId": userId
         })
-        .populate({
-            path: "players.userId",
-            select: "_id fullName playerStats avatar"
-        })
-        .populate({
-            path: "currentTurn.userId",
-            select: "_id fullName playerStats avatar"
-        });
+            .populate({
+                path: "players.userId",
+                select: "_id fullName playerStats avatar"
+            })
+            .populate({
+                path: "currentTurn.userId",
+                select: "_id fullName playerStats avatar"
+            });
 
         if (match) {
             return {
@@ -626,7 +626,7 @@ class MatchService {
         const tournament = await Tournament.findOne({
             "players.userId": userId
         }).sort({ createdAt: -1 })
-        .populate("players.userId", "_id fullName avatar playerStats isBot");
+            .populate("players.userId", "_id fullName avatar playerStats isBot");
 
         if (tournament) {
             // Case: Registered but not started

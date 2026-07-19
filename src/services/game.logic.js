@@ -37,14 +37,6 @@ class GameLogic {
         if (!player || !player.tokens) return 2;
 
         const unfinishedTokens = player.tokens.filter(t => !t.isFinished);
-        // const finishedTokens = player.tokens.filter(t => t.isFinished);
-        // if (finishedTokens.length === 3 && activeTokens.length === 1) {
-        //     const lastToken = activeTokens[0];
-        //     if (lastToken.position >= 52 && lastToken.position <= 57) {
-        //         return 1;
-        //     }
-        // }
-
         // Rule: Once every unfinished token is in the home path, roll one die.
         if (
             unfinishedTokens.length > 0 &&
@@ -689,7 +681,7 @@ class GameLogic {
             pendingBonus: 0,
             rollingPhase: true,
             turn: (currentTurnNumber || 0) + 1,
-            turnDeadline: new Date(Date.now() + 15000)
+            turnDeadline: new Date(Date.now() + 60000)
         };
         await match.save();
 

@@ -178,7 +178,7 @@ class TournamentService {
                 pendingBonus: 0,
                 rollingPhase: true,
                 turn: 1,
-                turnDeadline: new Date(Date.now() + 15000)
+                turnDeadline: new Date(Date.now() + 60000)
             };
 
             await match.save();
@@ -301,7 +301,7 @@ class TournamentService {
             pendingBonus: 0,
             rollingPhase: true,
             turn: 1,
-            turnDeadline: new Date(Date.now() + 15000)
+            turnDeadline: new Date(Date.now() + 60000)
         };
 
         await match.save();

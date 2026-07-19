@@ -80,7 +80,7 @@ module.exports = (io, socket) => {
         BotService.onTurnChanged(io, matchId);
         const isYourTurn =
           match.currentTurn.userId._id?.toString() ===
-            socket.user._id.toString() ||
+          socket.user._id.toString() ||
           match.currentTurn.userId.toString() === socket.user._id.toString();
         emitTurnTimerSync(io, socket, match, { isYourTurn });
         emitTurnTimerSync(io, roomName, match);
@@ -161,7 +161,7 @@ module.exports = (io, socket) => {
         startTimer(io, match, match.currentTurn.turn);
         const isYourTurn =
           match.currentTurn.userId._id?.toString() ===
-            socket.user._id.toString() ||
+          socket.user._id.toString() ||
           match.currentTurn.userId.toString() === socket.user._id.toString();
         emitTurnTimerSync(io, socket, match, { isYourTurn });
       }
@@ -214,7 +214,7 @@ module.exports = (io, socket) => {
         pendingBonus: 0,
         rollingPhase: true,
         turn: 1,
-        turnDeadline: new Date(Date.now() + 15000),
+        turnDeadline: new Date(Date.now() + 60000),
       };
 
       await match.save();
@@ -270,7 +270,7 @@ module.exports = (io, socket) => {
           message: "Match cancelled by host",
         });
 
-        BotService.cleanupBotUsers(matchId, result.botIds).catch(() => {});
+        BotService.cleanupBotUsers(matchId, result.botIds).catch(() => { });
 
         // Safely force all connected players to leave the socket room after a short delay
         // to ensure the emit successfully reaches all clients first
@@ -338,7 +338,7 @@ module.exports = (io, socket) => {
         }
 
         socket.leave(roomName);
-        BotService.cleanupBotUsers(matchId).catch(() => {});
+        BotService.cleanupBotUsers(matchId).catch(() => { });
       } else if (result.action === "PLAYER_LEFT_GAME") {
         // 4P etc
         io.to(`game:${matchId}`).emit("game:playerLeft", {

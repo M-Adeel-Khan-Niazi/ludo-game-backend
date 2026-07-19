@@ -40,7 +40,7 @@ class GameActionService {
 
             match.currentTurn.diceValues = [...unusedDice, ...latestRoll];
             match.currentTurn.usedDiceIndices = [];
-            match.currentTurn.turnDeadline = new Date(Date.now() + 15000);
+            match.currentTurn.turnDeadline = new Date(Date.now() + 60000);
 
             const roomName = `game:${matchId}`;
             const isDoubleSix = latestRoll[0] === 6 && latestRoll[1] === 6;
@@ -209,7 +209,7 @@ class GameActionService {
                 const remainingHasMoves = GameLogic.hasAnyValidMove(match, player);
 
                 if (remainingHasMoves) {
-                    match.currentTurn.turnDeadline = new Date(Date.now() + 15000);
+                    match.currentTurn.turnDeadline = new Date(Date.now() + 60000);
                     await match.save();
 
                     let captureWarning = null;
@@ -246,7 +246,7 @@ class GameActionService {
                 match.currentTurn.pendingBonus -= 1;
                 match.currentTurn.usedDiceIndices = [];
                 match.currentTurn.diceValues = [];
-                match.currentTurn.turnDeadline = new Date(Date.now() + 15000);
+                match.currentTurn.turnDeadline = new Date(Date.now() + 60000);
                 await match.save();
 
                 const reason = result.bonusReason || "bonus";
