@@ -37,6 +37,13 @@ class GameLogic {
         if (!player || !player.tokens) return 2;
 
         const unfinishedTokens = player.tokens.filter(t => !t.isFinished);
+        // const finishedTokens = player.tokens.filter(t => t.isFinished);
+        // if (finishedTokens.length === 3 && activeTokens.length === 1) {
+        //     const lastToken = activeTokens[0];
+        //     if (lastToken.position >= 52 && lastToken.position <= 57) {
+        //         return 1;
+        //     }
+        // }
 
         // Rule: Once every unfinished token is in the home path, roll one die.
         if (
@@ -52,7 +59,7 @@ class GameLogic {
         return !!token && token.position >= this.PATH_LENGTH && token.position < this.TOTAL_STEPS;
     }
 
-    
+
 
     /**
      * Get the next turn color
@@ -102,7 +109,8 @@ class GameLogic {
             }
         } else {
             if (nextPos > 51) {
-                return -1;
+                nextPos = nextPos % 52;
+                // return -1;
             }
         }
         return nextPos;
@@ -290,7 +298,7 @@ class GameLogic {
 
         // Priority Rule: If player has an unused 6 and locked tokens, they MUST unlock first.
         if (match && match.currentTurn && match.currentTurn.diceValues && match.currentTurn.usedDiceIndices) {
-            const hasUnusedSix = match.currentTurn.diceValues.some((val, idx) => 
+            const hasUnusedSix = match.currentTurn.diceValues.some((val, idx) =>
                 val === 6 && !match.currentTurn.usedDiceIndices.includes(idx)
             );
             const hasLockedTokens = player.tokens.some(t => t.position === this.STATE_HOME);
@@ -495,7 +503,7 @@ class GameLogic {
         }
 
         // Explicit Error check to provide meaningful feedback to the player
-        const hasUnusedSix = match.currentTurn.diceValues.some((val, idx) => 
+        const hasUnusedSix = match.currentTurn.diceValues.some((val, idx) =>
             val === 6 && !match.currentTurn.usedDiceIndices.includes(idx)
         );
         const hasLockedTokens = player.tokens.some(t => t.position === this.STATE_HOME);
@@ -652,7 +660,7 @@ class GameLogic {
             winnerId
         };
     }
-    
+
     async switchTurn(io, match, logger) {
         const { startTimer, clearTimer, emitTurnTimerSync } = require('../services/timer.service');
 
@@ -793,7 +801,7 @@ class GameLogic {
      */
     getRankedPlayers(match, winnerId) {
         const winnerIdStr = winnerId.toString();
-        
+
         // Map to intermediate object
         const playersWithScore = match.players.map(p => {
             // Handle populated or unpopulated userId
@@ -893,10 +901,10 @@ class GameLogic {
         // Assign Ranks and populate lists
         playersData.forEach((p, index) => {
             p.rank = p.isWinner ? 1 : (match.gameType === "2V2" ? 2 : index + 1);
-            
+
             // Remove internal flag before pushing
             const { isWinner, ...playerObj } = p;
-            
+
             if (isWinner) winners.push(playerObj);
             else losers.push(playerObj);
         });
