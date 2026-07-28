@@ -326,6 +326,8 @@ class GameLogic {
             return false; // Safe exit
         }
 
+        // if (!this.isValidMove(token, diceValue, player, match)) return false;
+
         const potentialPos = this.getNextPosition(token, diceValue, player.hasCaptured);
         if (potentialPos > 51) return false; // In safe zone/home path
 
@@ -450,18 +452,23 @@ class GameLogic {
         return this.getCaptureWarning(match, player).captureWarning !== null;
     }
 
+    hasMoveForDie(match, player, diceValue, isCombined = false) {
+        if (!match || !player || diceValue == null) return false;
+        return player.tokens.some((t) => this.isValidMove(t, diceValue, player, match, isCombined));
+    }
+
     hasAnyValidMove(match, player) {
         const unusedIndices = this.getUnusedDiceIndices(match);
         if (!unusedIndices.length) return false;
 
         for (const idx of unusedIndices) {
             const val = match.currentTurn.diceValues[idx];
-            if (player.tokens.some((t) => this.isValidMove(t, val, player, match))) return true;
+            if (this.hasMoveForDie(match, player, val, false)) return true;
         }
 
         const combinedValue = this.getCombinedDiceValue(match, unusedIndices);
         if (combinedValue !== null) {
-            if (player.tokens.some((t) => this.isValidMove(t, combinedValue, player, match, true))) {
+            if (this.hasMoveForDie(match, player, combinedValue, true)) {
                 return true;
             }
         }

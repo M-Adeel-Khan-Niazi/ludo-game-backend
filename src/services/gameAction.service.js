@@ -81,18 +81,50 @@ class GameActionService {
             const hasValidMoves = GameLogic.hasAnyValidMove(match, player);
 
             if (!hasValidMoves) {
-                match.currentTurn.turnDeadline = new Date(Date.now() + 2000);
-                await match.save();
-                io.to(roomName).emit("game:diceRolled", {
-                    userId,
-                    diceValues: match.currentTurn.diceValues,
-                    latestRoll,
-                    hasValidMoves: false,
-                    canRollAgain: false,
-                    turnDeadline: match.currentTurn.turnDeadline,
-                });
-                startTimer(io, match, match.currentTurn.turn);
-                return { match, hasValidMoves: false };
+                // Skip all remaining unplayable dice
+                const allIndices = match.currentTurn.diceValues.map((_, i) => i);
+                match.currentTurn.usedDiceIndices = allIndices;
+
+                if (isDoubleSix) {
+                    // Double Six with no valid moves: skip dice & grant extra turn
+                    match.currentTurn.pendingBonus = (match.currentTurn.pendingBonus || 0) + 1;
+                    match.currentTurn.rollingPhase = true;
+                    match.currentTurn.usedDiceIndices = [];
+                    match.currentTurn.diceValues = [];
+                    match.currentTurn.turnDeadline = new Date(Date.now() + 60000);
+                    await match.save();
+
+                    io.to(roomName).emit("game:diceRolled", {
+                        userId,
+                        diceValues: match.currentTurn.diceValues,
+                        latestRoll,
+                        hasValidMoves: false,
+                        canRollAgain: true,
+                        turnDeadline: match.currentTurn.turnDeadline,
+                    });
+                    io.to(roomName).emit("game:turnContinued", {
+                        userId,
+                        message: "No valid moves for double six. Skipped dice! Bonus turn! Roll again...",
+                        extraTurn: true,
+                        reason: "bonus",
+                        pendingBonus: match.currentTurn.pendingBonus,
+                        turnDeadline: match.currentTurn.turnDeadline,
+                    });
+                    startTimer(io, match, match.currentTurn.turn);
+                    return { match, canRollAgain: true, bonusTurn: true };
+                } else {
+                    // Regular roll with no valid moves: skip remaining dice and switch turn
+                    await GameLogic.switchTurn(io, match, logger);
+                    io.to(roomName).emit("game:diceRolled", {
+                        userId,
+                        diceValues: match.currentTurn.diceValues,
+                        latestRoll,
+                        hasValidMoves: false,
+                        canRollAgain: false,
+                        turnDeadline: match.currentTurn.turnDeadline,
+                    });
+                    return { match, hasValidMoves: false, switchedTurn: true };
+                }
             }
 
             let captureWarning = null;
@@ -238,6 +270,17 @@ class GameActionService {
                     });
                     startTimer(io, match, match.currentTurn.turn);
                     return { match, continueMove: true };
+                } else {
+                    // No remaining die is playable => clear/skip remaining dice
+                    const allIndices = match.currentTurn.diceValues.map((_, i) => i);
+                    match.currentTurn.usedDiceIndices = allIndices;
+                    match.markModified("currentTurn");
+                    await match.save();
+
+                    io.to(roomName).emit("game:diceSkipped", {
+                        userId,
+                        message: "Remaining dice skipped as no legal moves exist",
+                    });
                 }
             }
 
