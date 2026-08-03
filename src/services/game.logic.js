@@ -475,6 +475,92 @@ class GameLogic {
         return false;
     }
 
+    /**
+     * Check if there exists SOME ordering of the unused dice (including the single
+     * combined-dice move consuming 2+ dice at once) that can legally play through
+     * ALL of the rolled dice. Used to decide whether a whole turn is skippable.
+     *
+     * Uses optimistic-capture handling: if a simulated move could capture, we
+     * optimistically set hasCaptured=true (which opens the +1 home-path-entry
+     * offset) without mutating opponent tokens. This never wrongly skips a turn
+     * that a real capture sequence could complete; in rare complex capture chains
+     * it may allow play instead of skipping. This is the intended safe direction.
+     *
+     * Mutates and reverts the in-memory `match.currentTurn.usedDiceIndices` and
+     * the player's tokens/player.hasCaptured while recursing.
+     */
+    hasCompleteMoveSequence(match, player) {
+        const initialUnused = this.getUnusedDiceIndices(match);
+        if (!initialUnused.length) return false;
+        return this._canConsumeAll(match, player, initialUnused);
+    }
+
+    _canConsumeAll(match, player, remainingIndices) {
+        if (remainingIndices.length === 0) return true;
+
+        const usedIndices = match.currentTurn.usedDiceIndices;
+
+        // -- Single die branch: try consuming one die at a time --
+        for (const diePos of remainingIndices) {
+            const diceValue = match.currentTurn.diceValues[diePos];
+            const rest = remainingIndices.filter((i) => i !== diePos);
+
+            for (const token of player.tokens) {
+                if (token.isFinished) continue;
+                const wasHome = (token.position === this.STATE_HOME);
+                if (!this.isValidMove(token, diceValue, player, match, false)) continue;
+
+                // Compute capture possibility BEFORE moving (uses pre-move position)
+                const wouldCapture = this.checkCapture(match, player, token, diceValue);
+
+                // --- Snapshot & apply ---
+                const prevPos = token.position;
+                const prevFinished = token.isFinished;
+                const prevHasCaptured = player.hasCaptured;
+
+                token.position = wasHome ? 0 : this.getNextPosition(token, diceValue, player.hasCaptured);
+                let enteredHome = false;
+                if (token.position === 57) {
+                    token.isFinished = true;
+                    enteredHome = true;
+                }
+                if (wouldCapture) player.hasCaptured = true;
+                usedIndices.push(diePos);
+
+                let result = false;
+                try {
+                    result = this._canConsumeAll(match, player, rest);
+                } finally {
+                    // --- Revert ---
+                    usedIndices.pop();
+                    token.position = prevPos;
+                    token.isFinished = prevFinished;
+                    player.hasCaptured = prevHasCaptured;
+                    if (!enteredHome) {
+                        // isFinished was restored above; nothing else
+                    }
+                }
+                if (result) return true;
+            }
+        }
+
+        // -- Combined dice branch: spend >=2 remaining dice as one combined move --
+        if (remainingIndices.length >= 2) {
+            const combinedValue = remainingIndices.reduce(
+                (sum, idx) => sum + match.currentTurn.diceValues[idx],
+                0
+            );
+            for (const token of player.tokens) {
+                if (token.isFinished) continue;
+                if (this.isValidMove(token, combinedValue, player, match, true)) {
+                    return true; // consumes all remaining dice at once
+                }
+            }
+        }
+
+        return false;
+    }
+
     async applyMove(match, userId, tokenId, diceIndex) {
         const player = match.players.find(p => p.userId.toString() === userId.toString());
         if (!player) throw new Error("Player not found");

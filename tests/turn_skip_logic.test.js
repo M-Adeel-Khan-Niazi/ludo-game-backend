@@ -62,4 +62,50 @@ assert.strictEqual(GameLogic.hasAnyValidMove(matchLocked, playerLocked), false, 
 matchLocked.currentTurn.diceValues = [6, 6];
 assert.strictEqual(GameLogic.hasAnyValidMove(matchLocked, playerLocked), true, "6,6 rolled with locked tokens should return true (unlock available)");
 
-console.log("All Turn Skip Logic Tests Passed!");
+// ============================================================
+// hasCompleteMoveSequence Tests
+// ============================================================
+console.log("\nRunning hasCompleteMoveSequence Tests...");
+
+// 5. All locked, no six rolled -> no complete sequence
+matchLocked.currentTurn.diceValues = [4, 1];
+matchLocked.currentTurn.usedDiceIndices = [];
+assert.strictEqual(GameLogic.hasCompleteMoveSequence(matchLocked, playerLocked), false, "4,1 with all tokens locked: cannot unlock, no complete sequence");
+
+// 6. All locked, [6,5] -> unlock with 6 (->pos 0), then 5 playable (0+5=5) -> complete sequence
+matchLocked.currentTurn.diceValues = [6, 5];
+matchLocked.currentTurn.usedDiceIndices = [];
+assert.strictEqual(GameLogic.hasCompleteMoveSequence(matchLocked, playerLocked), true, "6,5 with all locked: unlock with 6 then play 5 -> true");
+
+// 7. Single unfinished token in home path (pos 52), others finished. [6,5]:
+//    6 overshoots (52+6=58), 5 reaches home (52+5=57) but leaves the 6 unplayable,
+//    combined 11 also overshoots -> no complete sequence -> turn should skip
+match.currentTurn.diceValues = [6, 5];
+match.currentTurn.usedDiceIndices = [];
+assert.strictEqual(GameLogic.hasCompleteMoveSequence(match, playerRed), false, "6,5 with single token at 52: 5 reaches home leaving 6 unplayable -> false");
+
+// 8. Token on main board, both dice individually playable in sequence -> true
+const playerOnBoard = {
+    userId: "user3",
+    color: "blue",
+    hasCaptured: false,
+    tokens: [
+        { tokenId: "B1", position: 0, isFinished: false },
+        { tokenId: "B2", position: 999, isFinished: true },
+        { tokenId: "B3", position: 999, isFinished: true },
+        { tokenId: "B4", position: 999, isFinished: true }
+    ]
+};
+const matchOnBoard = {
+    players: [playerOnBoard],
+    currentTurn: { userId: "user3", color: "blue", diceValues: [2, 3], usedDiceIndices: [] }
+};
+assert.strictEqual(GameLogic.hasCompleteMoveSequence(matchOnBoard, playerOnBoard), true, "2,3 with token at 0: play 2 then 3 -> true");
+
+// 9. Ensure the in-memory match is not left mutated after the check
+assert.deepStrictEqual(match.currentTurn.usedDiceIndices, [], "usedDiceIndices should be restored to [] after check");
+assert.strictEqual(playerRed.tokens[0].position, 52, "token position should be restored to 52 after check");
+
+console.log("All hasCompleteMoveSequence Tests Passed!");
+
+console.log("\nAll Turn Skip Logic Tests Passed!");

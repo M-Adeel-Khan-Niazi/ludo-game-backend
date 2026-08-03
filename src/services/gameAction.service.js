@@ -63,7 +63,28 @@ class GameActionService {
                     return { match, switchedTurn: true };
                 }
 
+                // Check if the doubled sixes can actually be played (complete sequence).
+                // Current mechanic discards the sixes and grants a re-roll; we only allow
+                // that re-roll if there is at least one playable sequence. Otherwise the
+                // turn is skipped (2s display + switchTurn) so the player isn't stranded.
+                const dsHasSequence = GameLogic.hasCompleteMoveSequence(match, player);
                 await match.save();
+
+                if (!dsHasSequence) {
+                    match.currentTurn.turnDeadline = new Date(Date.now() + 2000);
+                    await match.save();
+                    io.to(roomName).emit("game:diceRolled", {
+                        userId,
+                        diceValues: match.currentTurn.diceValues,
+                        latestRoll,
+                        hasValidMoves: false,
+                        canRollAgain: false,
+                        turnDeadline: match.currentTurn.turnDeadline,
+                    });
+                    startTimer(io, match, match.currentTurn.turn);
+                    return { match, hasValidMoves: false };
+                }
+
                 io.to(roomName).emit("game:diceRolled", {
                     userId,
                     diceValues: match.currentTurn.diceValues,
@@ -78,53 +99,26 @@ class GameActionService {
 
             match.currentTurn.rollingPhase = false;
 
-            const hasValidMoves = GameLogic.hasAnyValidMove(match, player);
+            const hasCompleteSequence = GameLogic.hasCompleteMoveSequence(match, player);
 
-            if (!hasValidMoves) {
-                // Skip all remaining unplayable dice
-                const allIndices = match.currentTurn.diceValues.map((_, i) => i);
-                match.currentTurn.usedDiceIndices = allIndices;
-
-                if (isDoubleSix) {
-                    // Double Six with no valid moves: skip dice & grant extra turn
-                    match.currentTurn.pendingBonus = (match.currentTurn.pendingBonus || 0) + 1;
-                    match.currentTurn.rollingPhase = true;
-                    match.currentTurn.usedDiceIndices = [];
-                    match.currentTurn.diceValues = [];
-                    match.currentTurn.turnDeadline = new Date(Date.now() + 60000);
-                    await match.save();
-
-                    io.to(roomName).emit("game:diceRolled", {
-                        userId,
-                        diceValues: match.currentTurn.diceValues,
-                        latestRoll,
-                        hasValidMoves: false,
-                        canRollAgain: true,
-                        turnDeadline: match.currentTurn.turnDeadline,
-                    });
-                    io.to(roomName).emit("game:turnContinued", {
-                        userId,
-                        message: "No valid moves for double six. Skipped dice! Bonus turn! Roll again...",
-                        extraTurn: true,
-                        reason: "bonus",
-                        pendingBonus: match.currentTurn.pendingBonus,
-                        turnDeadline: match.currentTurn.turnDeadline,
-                    });
-                    startTimer(io, match, match.currentTurn.turn);
-                    return { match, canRollAgain: true, bonusTurn: true };
-                } else {
-                    // Regular roll with no valid moves: skip remaining dice and switch turn
-                    await GameLogic.switchTurn(io, match, logger);
-                    io.to(roomName).emit("game:diceRolled", {
-                        userId,
-                        diceValues: match.currentTurn.diceValues,
-                        latestRoll,
-                        hasValidMoves: false,
-                        canRollAgain: false,
-                        turnDeadline: match.currentTurn.turnDeadline,
-                    });
-                    return { match, hasValidMoves: false, switchedTurn: true };
-                }
+            if (!hasCompleteSequence) {
+                // No sequence of moves can consume all the rolled dice. Skip the entire
+                // turn, but defer the switch by 2s so the client shows the rolled dice
+                // and the unused-dice panel before the turn changes.
+                // Note: diceValues is kept populated and usedDiceIndices stays [] (reset
+                // earlier) so the client displays the rolled numbers like a normal roll.
+                match.currentTurn.turnDeadline = new Date(Date.now() + 2000);
+                await match.save();
+                io.to(roomName).emit("game:diceRolled", {
+                    userId,
+                    diceValues: match.currentTurn.diceValues,
+                    latestRoll,
+                    hasValidMoves: false,
+                    canRollAgain: false,
+                    turnDeadline: match.currentTurn.turnDeadline,
+                });
+                startTimer(io, match, match.currentTurn.turn);
+                return { match, hasValidMoves: false };
             }
 
             let captureWarning = null;
@@ -270,17 +264,6 @@ class GameActionService {
                     });
                     startTimer(io, match, match.currentTurn.turn);
                     return { match, continueMove: true };
-                } else {
-                    // No remaining die is playable => clear/skip remaining dice
-                    const allIndices = match.currentTurn.diceValues.map((_, i) => i);
-                    match.currentTurn.usedDiceIndices = allIndices;
-                    match.markModified("currentTurn");
-                    await match.save();
-
-                    io.to(roomName).emit("game:diceSkipped", {
-                        userId,
-                        message: "Remaining dice skipped as no legal moves exist",
-                    });
                 }
             }
 
